@@ -229,5 +229,3 @@ def test_safe_error_message_classifies_locked_storage_without_raw_details(caplog
     message = safe_error_message(error, operation="planner_test", action="Saving plan")
     assert "database is busy" in message
     assert secret not in message and secret not in caplog.text
-
-\n

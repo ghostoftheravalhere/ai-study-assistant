@@ -290,5 +290,3 @@ def collect_diagnostics(*, session_state: Mapping[str, Any] | None = None,
         "ocr_run": False,
         "model_load_state": "LOADED" if model_loaded else "NOT LOADED",
     }
-
-\n

@@ -71,5 +71,3 @@ def render_system_health() -> None:
         for item in checks["dependencies"]:
             _show_check(item)
     st.caption("Checks are local and do not run OCR, contact Gemini, or download/load the embedding model. A configured Gemini key has not been validated by a live request.")
-
-\n

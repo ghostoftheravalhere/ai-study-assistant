@@ -46,5 +46,3 @@ def safe_error_message(error: BaseException, *, operation: str, action: str) -> 
         if getattr(item, "errno", None) == 28 or getattr(item, "winerror", None) == 112:
             return f"{action} could not be completed because the drive may be full. Free storage space, then retry."
     return f"{action} could not be completed. Check System Health for local database or storage issues, then try again."
-
-\n
