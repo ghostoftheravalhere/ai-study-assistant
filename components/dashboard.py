@@ -3,6 +3,7 @@
 import streamlit as st
 
 from utils.database import get_dashboard_stats, get_recent_activity
+from utils.indexing_service import get_document_index_statuses
 
 
 FEATURES = [
@@ -43,6 +44,14 @@ def render_dashboard() -> None:
                 f'<div class="stat-label">{label}</div><div class="stat-value">{value}</div></div>',
                 unsafe_allow_html=True,
             )
+
+    index_statuses = get_document_index_statuses()
+    indexed_count = sum(item["status"] == "indexed" for item in index_statuses)
+    pending_count = sum(item["status"] in {"not_indexed", "out_of_date", "failed"} for item in index_statuses)
+    st.caption(
+        f"Semantic search: {indexed_count} indexed document{'s' if indexed_count != 1 else ''}"
+        + (f" · {pending_count} ready to index" if pending_count else "")
+    )
 
     st.markdown('<div class="section-heading"><div><h2>Quick actions</h2><p>Pick up where your curiosity takes you.</p></div></div>', unsafe_allow_html=True)
     action_cols = st.columns(3, gap="medium")

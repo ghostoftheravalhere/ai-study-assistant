@@ -268,24 +268,27 @@ def test_document_selection_returns_only_the_requested_database_text(ai_database
     assert get_document("doc-1")["extracted_text"] == "Cell biology content"
 
 
-def test_selected_document_text_is_sent_to_the_gemini_request() -> None:
+def test_retrieved_document_context_is_sent_instead_of_full_document_text() -> None:
     service, models, client = make_service()
-    result = service.answer_chat([], "What does it say?", document_text="Private selected PDF text")
+    context = '[{"source_id":"Source 1","filename":"biology.pdf","page_number":4,"passage":"Cell division."}]'
+    result = service.answer_chat([], "What does it say?", retrieved_context=context)
     call = models.calls[0]
     sent_content = call["contents"][-1].parts[0].text
-    assert "Private selected PDF text" in sent_content
+    assert "Cell division." in sent_content
+    assert "biology.pdf" in sent_content and "page_number" in sent_content
     assert "What does it say?" in sent_content
     assert "history.pdf" not in sent_content
     assert call["model"] == "test-model"
     assert "untrusted" in call["config"].system_instruction
+    assert "citation" in call["config"].system_instruction
     assert result.text == "A clear model response."
     assert client.closed
 
 
-def test_empty_document_text_is_rejected_without_model_call() -> None:
+def test_empty_retrieved_context_is_rejected_without_model_call() -> None:
     service, models, _ = make_service()
-    with pytest.raises(GeminiServiceError, match="no selectable text"):
-        service.answer_chat([], "Question", document_text="  \n  ")
+    with pytest.raises(GeminiServiceError, match="No relevant passages"):
+        service.answer_chat([], "Question", retrieved_context="  \n  ")
     assert models.calls == []
 
 

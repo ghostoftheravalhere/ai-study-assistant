@@ -31,6 +31,11 @@ def _stored_path(stored_filename: str) -> Path:
     return path
 
 
+def resolve_stored_document_path(stored_filename: str) -> Path:
+    """Return a validated path for an app-generated stored PDF filename."""
+    return _stored_path(stored_filename)
+
+
 def _discard_partial_file(path: Path) -> None:
     """Best-effort cleanup that does not hide the original save failure."""
     try:

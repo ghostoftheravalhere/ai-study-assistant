@@ -1,6 +1,7 @@
 """PDF validation and text extraction using PyMuPDF."""
 
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import fitz
 
@@ -14,6 +15,11 @@ class PDFExtraction:
     page_count: int
     extracted_text: str
     extraction_status: str
+
+
+class PDFPageText(NamedTuple):
+    page_number: int
+    text: str
 
 
 def extract_pdf_text(file_bytes: bytes) -> PDFExtraction:
@@ -46,6 +52,31 @@ def extract_pdf_text(file_bytes: bytes) -> PDFExtraction:
             extracted_text=extracted_text,
             extraction_status=status,
         )
+    except (fitz.FileDataError, RuntimeError) as error:
+        raise PDFProcessingError("Text could not be extracted from this PDF.") from error
+    finally:
+        document.close()
+
+
+def extract_pdf_pages(file_bytes: bytes) -> tuple[int, list[PDFPageText]]:
+    """Extract page-level text with its real one-based page number."""
+    if not file_bytes:
+        raise PDFProcessingError("The selected file is empty.")
+    if not file_bytes.startswith(b"%PDF-"):
+        raise PDFProcessingError("This file does not appear to be a PDF. Please choose a valid PDF file.")
+    try:
+        document = fitz.open(stream=file_bytes, filetype="pdf")
+    except (fitz.FileDataError, RuntimeError, ValueError) as error:
+        raise PDFProcessingError("The PDF is damaged or unreadable. Please try another file.") from error
+    try:
+        if document.needs_pass:
+            raise PDFProcessingError("Password-protected PDFs are not supported. Remove the password and try again.")
+        if document.page_count < 1:
+            raise PDFProcessingError("This PDF does not contain any pages.")
+        return document.page_count, [
+            PDFPageText(page_number, page.get_text("text").strip())
+            for page_number, page in enumerate(document, start=1)
+        ]
     except (fitz.FileDataError, RuntimeError) as error:
         raise PDFProcessingError("Text could not be extracted from this PDF.") from error
     finally:

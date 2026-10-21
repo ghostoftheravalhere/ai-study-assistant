@@ -14,7 +14,7 @@ from streamlit.errors import StreamlitSecretNotFoundError
 
 from utils.ai_prompts import (
     CHAT_SYSTEM_INSTRUCTION,
-    DOCUMENT_CHAT_INSTRUCTION,
+    RETRIEVAL_CHAT_INSTRUCTION,
     build_question_prompt,
     build_summary_prompt,
 )
@@ -324,7 +324,7 @@ class GeminiService:
         history: Sequence[Mapping[str, str]],
         user_message: str,
         *,
-        document_text: str | None = None,
+        retrieved_context: str | None = None,
     ) -> AITextResult:
         message = user_message.strip()
         if not message:
@@ -344,20 +344,15 @@ class GeminiService:
                     )
                 )
 
-        context_truncated = False
-        original_context_length = 0
-        if document_text is not None:
-            selection = select_document_context(document_text)
-            context_truncated = selection.truncated
-            original_context_length = selection.original_length
+        if retrieved_context is not None:
+            if not retrieved_context.strip():
+                raise GeminiServiceError("No relevant passages were retrieved. Rephrase the question or choose another document.")
             latest_content = (
-                "The user asks a question about the single selected document.\n"
-                "<selected_document_extracted_text_untrusted_reference>\n"
-                f"{selection.text}\n"
-                "</selected_document_extracted_text_untrusted_reference>\n\n"
+                "Use only the retrieved passages below as source evidence for this answer.\n"
+                f"{retrieved_context}\n\n"
                 f"Question: {message}"
             )
-            system_instruction = CHAT_SYSTEM_INSTRUCTION + "\n\n" + DOCUMENT_CHAT_INSTRUCTION
+            system_instruction = CHAT_SYSTEM_INSTRUCTION + "\n\n" + RETRIEVAL_CHAT_INSTRUCTION
         else:
             latest_content = message
             system_instruction = CHAT_SYSTEM_INSTRUCTION + " Do not imply that a document has been selected or read."
@@ -365,7 +360,7 @@ class GeminiService:
             types.Content(role="user", parts=[types.Part.from_text(text=latest_content)])
         )
         answer = self._generate(contents, system_instruction=system_instruction)
-        return AITextResult(answer, context_truncated, original_context_length)
+        return AITextResult(answer, False, 0)
 
     def summarize_document(self, document_text: str, summary_format: str) -> AITextResult:
         selection = select_document_context(document_text)

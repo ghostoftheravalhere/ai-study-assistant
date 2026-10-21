@@ -4,6 +4,13 @@ import streamlit as st
 
 from utils.config import MAX_UPLOAD_SIZE_MB
 from utils.documents import DocumentError, delete_document, get_document, list_documents, save_uploaded_pdf
+from utils.indexing_service import (
+    IndexingError,
+    get_document_index_statuses,
+    index_document,
+    index_pending_documents,
+    rebuild_faiss_index,
+)
 
 
 _PREVIEW_CHAR_LIMIT = 24_000
@@ -74,9 +81,79 @@ def render_documents() -> None:
         )
         return
 
+    index_statuses = get_document_index_statuses()
+    index_by_id = {item["id"]: item for item in index_statuses}
+    status_counts = {name: sum(item["status"] == name for item in index_statuses) for name in (
+        "indexed", "not_indexed", "out_of_date", "failed", "missing_source", "no_text"
+    )}
+    st.caption(
+        f"Semantic index: {status_counts['indexed']} indexed · "
+        f"{status_counts['not_indexed']} awaiting indexing · "
+        f"{status_counts['out_of_date'] + status_counts['failed']} requiring reindexing"
+    )
+    st.caption("Indexing uses local CPU embeddings and does not require a Gemini key. The embedding model may download the first time you index.")
+    eligible_count = status_counts["not_indexed"] + status_counts["out_of_date"] + status_counts["failed"]
+    index_col, rebuild_col = st.columns(2)
+    with index_col:
+        if st.button("Index documents" if eligible_count else "All eligible documents indexed", disabled=eligible_count == 0, type="primary", key="index_all_documents"):
+            progress = st.progress(0.0, text="Preparing local document indexing…")
+            filename_by_id = {item["id"]: item["original_filename"] for item in documents}
+            try:
+                with st.spinner("Embedding PDF passages locally on CPU…"):
+                    results = index_pending_documents(
+                        progress_callback=lambda document_id, value: progress.progress(
+                            value,
+                            text=f"Indexing {filename_by_id.get(document_id, 'document')}…",
+                        )
+                    )
+                for result in results:
+                    if result.status == "indexed":
+                        st.success(f"Indexed {result.filename}: {result.chunk_count} passages.")
+                    else:
+                        st.error(result.message)
+                index_statuses = get_document_index_statuses()
+                index_by_id = {item["id"]: item for item in index_statuses}
+            except (IndexingError, OSError) as error:
+                st.error(str(error))
+            finally:
+                progress.empty()
+    with rebuild_col:
+        if st.button("Rebuild FAISS cache", disabled=status_counts["indexed"] == 0, key="rebuild_faiss_cache"):
+            try:
+                with st.spinner("Rebuilding the local FAISS cache from SQLite vectors…"):
+                    count = rebuild_faiss_index()
+                st.success(f"Rebuilt the FAISS cache with {count} vectors.")
+            except IndexingError as error:
+                st.error(str(error))
+
     st.caption(f"{len(documents)} document{'s' if len(documents) != 1 else ''} in your library")
     for document in documents:
         with st.expander(f"▤  {document['original_filename']}", expanded=False):
+            index_status = index_by_id.get(document["id"], {}).get("status", "not_indexed")
+            st.write(f"**Semantic index:** {index_status.replace('_', ' ').title()}")
+            last_error = index_by_id.get(document["id"], {}).get("error_message")
+            if last_error:
+                st.caption(f"Last indexing issue: {last_error}")
+            if document["extraction_status"] == "ready":
+                action = "Reindex" if index_status == "indexed" else "Index / retry"
+                if st.button(action, key=f"index_document_{document['id']}"):
+                    progress = st.progress(0.0, text=f"Preparing {document['original_filename']}…")
+                    try:
+                        with st.spinner("The first index may download the embedding model; indexing uses local CPU."):
+                            result = index_document(
+                                document["id"],
+                                force=True,
+                                progress_callback=lambda value: progress.progress(value),
+                            )
+                        st.success(f"Indexed {result.chunk_count} passages.")
+                        updated_statuses = get_document_index_statuses()
+                        index_by_id[document["id"]] = next(
+                            item for item in updated_statuses if item["id"] == document["id"]
+                        )
+                    except (IndexingError, OSError) as error:
+                        st.error(str(error))
+                    finally:
+                        progress.empty()
             metadata_columns = st.columns(4)
             metadata = [
                 ("File size", _format_file_size(document["file_size_bytes"])),

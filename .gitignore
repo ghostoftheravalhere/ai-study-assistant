@@ -30,6 +30,12 @@ data/
 documents/
 *.pdf
 .streamlit/secrets.toml
+indexes/
+*.faiss
+*.index
+models/
+model-cache/
+.cache/
 
 # Editors and operating systems
 .vscode/

@@ -8,6 +8,7 @@ from components.dashboard import render_dashboard
 from components.sidebar import NAVIGATION, render_sidebar
 from pages.ai_chat import render_ai_chat
 from pages.documents import render_documents
+from pages.document_search import render_document_search
 from pages.progress import render_progress
 from pages.question_generator import render_question_generator
 from pages.quiz import render_quiz
@@ -47,6 +48,7 @@ def main() -> None:
         "Dashboard": render_dashboard,
         "AI Chat": render_ai_chat,
         "My Documents": render_documents,
+        "Semantic Search": render_document_search,
         "AI Summarizer": render_summarizer,
         "Question Generator": render_question_generator,
         "Practice Quiz": render_quiz,

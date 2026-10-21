@@ -1,4 +1,4 @@
-"""General and document-grounded study chat."""
+"""General chat and retrieval-grounded study conversations."""
 
 import sqlite3
 import uuid
@@ -6,8 +6,15 @@ import uuid
 import streamlit as st
 
 from components.document_picker import render_document_picker
-from utils.config import MAX_DOCUMENT_CONTEXT_CHARS
-from utils.database import create_conversation, delete_conversation, get_chat_messages, list_conversations, save_chat_exchange
+from utils.config import EMBEDDING_MODEL_NAME
+from utils.database import (
+    create_conversation,
+    delete_conversation,
+    get_chat_messages,
+    list_conversations,
+    save_chat_exchange,
+)
+from utils.embedding_service import EmbeddingModelError
 from utils.gemini_service import (
     GeminiConfigurationError,
     GeminiService,
@@ -15,44 +22,104 @@ from utils.gemini_service import (
     is_gemini_configured,
     load_gemini_model,
 )
+from utils.indexing_service import IndexingError, get_document_index_statuses, index_document
+from utils.retrieval_service import RetrievalError, RetrievalService, sanitize_source_citations
 
 
 def _render_setup_help() -> None:
     st.info(
         "Gemini is not configured yet. Add `GEMINI_API_KEY_1` (or the legacy `GEMINI_API_KEY`) to your environment or to "
-        "`.streamlit/secrets.toml` to send AI requests. The key is never shown here."
+        "`.streamlit/secrets.toml` to generate an AI answer. Your local search results remain available without a Gemini key."
     )
+
+
+def _source_payload(passages) -> list[dict]:
+    return [
+        {
+            "source_id": passage.source_id,
+            "document_id": passage.document_id,
+            "filename": passage.filename,
+            "page_number": passage.page_number,
+            "snippet": passage.text,
+            "similarity": passage.similarity,
+        }
+        for passage in passages
+    ]
+
+
+def _render_sources(sources: list[dict], *, key: str) -> None:
+    if not sources:
+        return
+    with st.expander(f"Sources used · {len(sources)} passage{'s' if len(sources) != 1 else ''}"):
+        for source in sources:
+            st.markdown(
+                f"**{source['source_id']} · {source['filename']} · page {source['page_number']}**"
+            )
+            if isinstance(source.get("similarity"), (int, float)):
+                st.caption(f"Cosine similarity: {source['similarity']:.3f} · Similarity is a ranking score, not a probability.")
+            st.markdown(source.get("snippet", ""))
+            st.divider()
+
+
+def _index_selected_document(document_id: str, filename: str) -> None:
+    progress = st.progress(0.0, text=f"Preparing {filename} for local search…")
+    try:
+        with st.spinner("The embedding model may download the first time you index a PDF. This runs locally on CPU."):
+            result = index_document(document_id, progress_callback=lambda value: progress.progress(value))
+        st.success(f"Indexed {result.chunk_count} passages from {filename}.")
+        st.rerun()
+    except IndexingError as error:
+        st.error(str(error))
+    finally:
+        progress.empty()
 
 
 def render_ai_chat() -> None:
     st.markdown('<div class="eyebrow">YOUR STUDY COMPANION</div>', unsafe_allow_html=True)
     st.markdown('<h1 class="page-title">AI Chat</h1>', unsafe_allow_html=True)
     st.markdown(
-        '<p class="page-subtitle">Ask general study questions or focus on one PDF in your library.</p>',
+        '<p class="page-subtitle">Ask a general study question or ground your chat in locally indexed PDF passages.</p>',
         unsafe_allow_html=True,
     )
 
-    chat_mode = st.radio(
-        "Chat mode",
-        ("General study chat", "Ask about a document"),
-        horizontal=True,
-        key="ai_chat_mode",
-    )
+    mode_labels = {
+        "General study chat": "general",
+        "Ask about one document": "document",
+        "Ask across indexed documents": "all_documents",
+    }
+    chat_label = st.radio("Chat mode", tuple(mode_labels), horizontal=True, key="ai_chat_mode")
+    chat_mode = mode_labels[chat_label]
     selected_document = None
     source_document_id = None
-    if chat_mode == "Ask about a document":
+    status_by_id = {item["id"]: item for item in get_document_index_statuses()}
+    if chat_mode == "document":
         selected_document = render_document_picker("Study document", key="chat")
         if selected_document is None:
             return
         source_document_id = selected_document["id"]
-        if selected_document["extraction_status"] != "ready" or not selected_document["extracted_text"].strip():
-            st.warning("This PDF has no selectable text. Choose a text-based PDF; OCR is not available yet.")
+        status = status_by_id.get(source_document_id, {}).get("status", "not_indexed")
+        if selected_document["extraction_status"] != "ready" or status == "no_text":
+            st.warning("This PDF has no selectable text. OCR is not implemented, so it cannot be semantically indexed.")
+            return
+        if status != "indexed":
+            st.warning(f"This PDF is {status.replace('_', ' ')} and is not available for document chat yet.")
+            if st.button("Index selected PDF locally", type="primary", key=f"index_chat_{source_document_id}"):
+                _index_selected_document(source_document_id, selected_document["original_filename"])
+            st.caption("Indexing uses the local CPU embedding model and does not require a Gemini API key.")
+            return
+    elif chat_mode == "all_documents":
+        indexed_count = sum(item["status"] == "indexed" for item in status_by_id.values())
+        if indexed_count == 0:
+            st.info("No documents are indexed yet. Index PDFs in My Documents before asking across your library.")
+            if st.button("Open My Documents", key="open_docs_for_chat"):
+                st.session_state.active_page = "My Documents"
+                st.rerun()
             return
 
-    context_key = source_document_id or "general"
+    context_key = source_document_id or chat_mode
     selector_key = f"chat_conversation_{context_key}"
     try:
-        conversations = list_conversations(source_document_id)
+        conversations = list_conversations(source_document_id, chat_mode=chat_mode)
     except (OSError, sqlite3.Error):
         st.error("Your saved conversations could not be loaded. Check the local database and try again.")
         return
@@ -85,18 +152,17 @@ def render_ai_chat() -> None:
             st.error("This conversation could not be loaded. Check the local database and try again.")
             return
 
-    context_notice = st.session_state.get(f"chat_context_notice_{selected_conversation_id}") if selected_conversation_id else None
-    if context_notice:
-        st.warning(context_notice)
     if not messages:
         st.markdown(
             '<div class="empty-state"><div class="empty-icon">✦</div><strong>What are you studying today?</strong>'
             '<p>Ask a question to start a conversation. Successful chats are saved on this device.</p></div>',
             unsafe_allow_html=True,
         )
-    for message in messages:
+    for index, message in enumerate(messages):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+            if message["role"] == "assistant":
+                _render_sources(message.get("sources", []), key=f"{selected_conversation_id}_{index}")
 
     if selected_conversation_id:
         if st.button("Clear this conversation", key=f"clear_chat_{selected_conversation_id}"):
@@ -119,38 +185,54 @@ def render_ai_chat() -> None:
                     st.rerun()
 
     st.caption(
-        f"Model: {load_gemini_model()} · When sent, your message"
-        + (" and the selected PDF's extracted text" if selected_document else "")
-        + " are sent to Google Gemini for processing."
+        f"Model: {load_gemini_model()} · Local embedding model: {EMBEDDING_MODEL_NAME} · "
+        + ("Only retrieved excerpts are sent to Gemini when you submit a document question." if chat_mode != "general" else "General chat sends no document text.")
     )
-    if not is_gemini_configured():
+    if chat_mode == "general" and not is_gemini_configured():
         _render_setup_help()
         return
+    if chat_mode != "general" and not is_gemini_configured():
+        st.info("Local retrieval works without a Gemini key. Add a key to receive an AI-generated answer after searching.")
     prompt = st.chat_input("Ask a study question…", max_chars=4_000)
     if not prompt:
         return
 
     history = [{"role": message["role"], "content": message["content"]} for message in messages]
-    document_text = selected_document["extracted_text"] if selected_document else None
     request_id = uuid.uuid4().hex
     try:
-        with st.spinner("Thinking through your question…"):
-            result = GeminiService().answer_chat(history, prompt, document_text=document_text)
-        conversation_id = selected_conversation_id or create_conversation(source_document_id)
-        saved = save_chat_exchange(conversation_id, prompt, result.text, request_id)
+        retrieved = None
+        if chat_mode != "general":
+            with st.spinner("Searching the selected local document scope…"):
+                retrieved = RetrievalService().search(prompt, document_id=source_document_id, top_k=5)
+            if not retrieved.passages:
+                st.info("StudyMate could not find relevant indexed passages. Rephrase the question or index/select another document.")
+                return
+            if not is_gemini_configured():
+                st.markdown("### Local search results")
+                _render_sources(_source_payload(retrieved.passages), key=f"preview_{request_id}")
+                _render_setup_help()
+                return
+
+        with st.spinner("Thinking through the retrieved study evidence…" if retrieved else "Thinking through your question…"):
+            response = GeminiService().answer_chat(
+                history,
+                prompt,
+                retrieved_context=retrieved.context if retrieved else None,
+            )
+        answer = sanitize_source_citations(response.text, retrieved.passages) if retrieved else response.text
+        conversation_id = selected_conversation_id or create_conversation(source_document_id, chat_mode=chat_mode)
+        sources = _source_payload(retrieved.passages) if retrieved else []
+        saved = save_chat_exchange(conversation_id, prompt, answer, request_id, sources=sources)
         if not saved:
             st.rerun()
         st.session_state[pending_selection_key] = conversation_id
-        if result.context_truncated:
-            st.session_state[f"chat_context_notice_{conversation_id}"] = (
-                f"For the latest answer, only the first {min(result.original_context_length, MAX_DOCUMENT_CONTEXT_CHARS):,} "
-                f"of {result.original_context_length:,} extracted characters were supplied "
-                "due to the context limit. This is direct truncation, not semantic search."
-            )
         st.rerun()
-    except GeminiConfigurationError:
-        _render_setup_help()
-    except GeminiServiceError as error:
+    except (GeminiConfigurationError, EmbeddingModelError) as error:
+        if isinstance(error, GeminiConfigurationError):
+            _render_setup_help()
+        else:
+            st.error(str(error))
+    except (GeminiServiceError, RetrievalError, IndexingError) as error:
         st.error(str(error))
     except (OSError, sqlite3.Error):
-        st.error("Gemini replied, but the conversation could not be saved locally. Please retry after checking storage.")
+        st.error("The answer could not be saved locally. Please check storage and try again.")
