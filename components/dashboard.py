@@ -55,7 +55,7 @@ def render_dashboard() -> None:
 
     st.markdown('<div class="section-heading"><div><h2>Quick actions</h2><p>Pick up where your curiosity takes you.</p></div></div>', unsafe_allow_html=True)
     action_cols = st.columns(3, gap="medium")
-    actions = [("＋", "Add a document", "My Documents"), ("✦", "Start an AI chat", "AI Chat"), ("✓", "Take a practice quiz", "Practice Quiz")]
+    actions = [("▦", "Plan study time", "Study Planner"), ("＋", "Add a document", "My Documents"), ("✓", "Take a practice quiz", "Practice Quiz")]
     for column, (icon, label, page) in zip(action_cols, actions):
         with column:
             if st.button(f"{icon}  {label}  →", key=f"quick_{page}", use_container_width=True):

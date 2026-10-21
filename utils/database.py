@@ -272,6 +272,48 @@ def initialize_database() -> None:
             connection.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_schedule_due ON flashcard_schedule(due_at, learning_state)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_reviews_card ON flashcard_reviews(card_id, reviewed_at DESC)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_reviews_date ON flashcard_reviews(reviewed_at DESC)")
+            # Phase 9 adds local planner tables only; existing study, quiz, and
+            # flashcard records remain authoritative and untouched.
+            connection.execute("""CREATE TABLE IF NOT EXISTS planner_settings (
+                id INTEGER PRIMARY KEY CHECK (id=1), daily_goal_minutes INTEGER NOT NULL DEFAULT 60 CHECK(daily_goal_minutes BETWEEN 0 AND 1440),
+                available_minutes INTEGER NOT NULL DEFAULT 120 CHECK(available_minutes BETWEEN 1 AND 1440),
+                study_days TEXT NOT NULL DEFAULT '[0,1,2,3,4]', max_tasks_per_day INTEGER NOT NULL DEFAULT 4 CHECK(max_tasks_per_day BETWEEN 1 AND 20), updated_at TEXT NOT NULL)""")
+            connection.execute("""CREATE TABLE IF NOT EXISTS planner_subjects (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL, archived_at TEXT)""")
+            connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_planner_subject_active_name ON planner_subjects(name COLLATE NOCASE) WHERE archived_at IS NULL")
+            connection.execute("""CREATE TABLE IF NOT EXISTS planner_exams (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, subject_id TEXT REFERENCES planner_subjects(id) ON DELETE SET NULL,
+                subject_name TEXT NOT NULL DEFAULT '', exam_date TEXT NOT NULL, start_time TEXT, location TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'upcoming' CHECK(status IN ('upcoming','completed','archived')),
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+            connection.execute("""CREATE TABLE IF NOT EXISTS planner_topics (
+                id TEXT PRIMARY KEY, subject_id TEXT NOT NULL REFERENCES planner_subjects(id) ON DELETE RESTRICT,
+                exam_id TEXT REFERENCES planner_exams(id) ON DELETE SET NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+                estimated_minutes INTEGER NOT NULL DEFAULT 60 CHECK(estimated_minutes BETWEEN 1 AND 100000), priority INTEGER NOT NULL DEFAULT 3 CHECK(priority BETWEEN 1 AND 5),
+                source_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL, source_filename TEXT, completed_at TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived_at TEXT)""")
+            connection.execute("""CREATE TABLE IF NOT EXISTS planner_tasks (
+                id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', task_type TEXT NOT NULL,
+                subject_id TEXT REFERENCES planner_subjects(id) ON DELETE SET NULL, topic_id TEXT REFERENCES planner_topics(id) ON DELETE SET NULL,
+                exam_id TEXT REFERENCES planner_exams(id) ON DELETE SET NULL, document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+                quiz_id TEXT REFERENCES quizzes(id) ON DELETE SET NULL,
+                document_filename TEXT, planned_date TEXT NOT NULL, estimated_minutes INTEGER NOT NULL CHECK(estimated_minutes BETWEEN 1 AND 1440),
+                priority INTEGER NOT NULL DEFAULT 3 CHECK(priority BETWEEN 1 AND 5), status TEXT NOT NULL DEFAULT 'planned' CHECK(status IN ('planned','completed','cancelled','missed')),
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT, completed_minutes INTEGER CHECK(completed_minutes IS NULL OR completed_minutes BETWEEN 1 AND 1440),
+                unique_key TEXT UNIQUE)""")
+            task_columns = {row[1] for row in connection.execute("PRAGMA table_info(planner_tasks)")}
+            if "quiz_id" not in task_columns:
+                connection.execute("ALTER TABLE planner_tasks ADD COLUMN quiz_id TEXT REFERENCES quizzes(id) ON DELETE SET NULL")
+            connection.execute("""CREATE TABLE IF NOT EXISTS planner_sessions (
+                id TEXT PRIMARY KEY, task_id TEXT REFERENCES planner_tasks(id) ON DELETE SET NULL,
+                subject_id TEXT REFERENCES planner_subjects(id) ON DELETE SET NULL, topic_id TEXT REFERENCES planner_topics(id) ON DELETE SET NULL,
+                exam_id TEXT REFERENCES planner_exams(id) ON DELETE SET NULL, duration_minutes INTEGER NOT NULL CHECK(duration_minutes BETWEEN 1 AND 1440),
+                note TEXT NOT NULL DEFAULT '', started_at TEXT, completed_at TEXT NOT NULL)""")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_planner_tasks_date_status ON planner_tasks(planned_date,status)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_planner_tasks_exam ON planner_tasks(exam_id,planned_date)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_planner_topics_subject ON planner_topics(subject_id,archived_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_planner_sessions_completed ON planner_sessions(completed_at DESC)")
     except (OSError, sqlite3.Error) as error:
         raise RuntimeError(f"Could not initialize the local database at {DATABASE_PATH}: {error}") from error
 

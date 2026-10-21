@@ -6,7 +6,7 @@ AI Study Assistant is a diploma engineering project that will bring document-bas
 
 ## Implemented features
 
-**Phases 6–8 are complete:** quizzes, flashcards, spaced repetition, progress analytics, and local OCR for scanned PDFs are available below.
+**Phases 6–9 are complete:** quizzes, flashcards, spaced repetition, progress analytics, local OCR, and the local-first study planner are available below.
 
 - Responsive Streamlit dashboard with custom CSS and working sidebar navigation.
 - Four dashboard metrics based only on recorded local activity. New installations show zero counts and no average score until real activity exists.
@@ -30,6 +30,7 @@ AI Study Assistant is a diploma engineering project that will bring document-bas
 - Active recall sessions with AGAIN, HARD, GOOD, and EASY ratings, deterministic spaced repetition, daily new-card limits, and append-only local review history.
 - Successful AI operations, including flashcard proposal generation, appear in recent activity without storing prompts, document contents, or generated results there.
 - Local Tesseract OCR for selected scanned PDF pages, with page-aware text, retryable status, and native-text preservation.
+- Local study planner with subjects, topics, exams, daily availability, deterministic exam revision proposals, editable tasks, missed-task recovery, and actual study-session history.
 
 ## Technology
 
@@ -59,6 +60,7 @@ ai-study-assistant/
 │   ├── documents.py
 │   ├── document_search.py
 │   ├── progress.py
+│   ├── planner.py
 │   ├── question_generator.py
 │   ├── quiz.py
 │   ├── settings.py
@@ -85,7 +87,8 @@ ai-study-assistant/
 │   ├── ocr_service.py
 │   ├── retrieval_service.py
 │   ├── vector_store.py
-│   └── pdf_processing.py
+│   ├── pdf_processing.py
+│   └── planner_service.py
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
@@ -155,6 +158,22 @@ The personal key lives only in the active Streamlit session's memory. StudyMate 
 - **Flashcard scheduling:** this SM-2-inspired variant schedules Again after 10 minutes; new Hard, Good, and Easy cards after 1, 2, and 4 days. During relearning after Again, these intervals are 1, 3, and 4 days. For later reviews, Hard uses about 1.2× the previous interval, Good uses the current ease factor, and Easy is at least one day longer than the corresponding Good interval. Hard lowers ease by 0.15, Easy raises it by 0.15; intervals are clamped to 1–3650 days. Again lowers ease by 0.2 and records a lapse. Failed cards do not repeat inside the current session. Day intervals keep the local clock time, and “due today” uses local calendar midnight on the running application host.
 - **Study Progress:** see completed and timed-out attempts, average/best/latest submitted quiz scores, score trend when at least two attempts exist, and accuracy across answered questions. Average score is the arithmetic mean of attempt percentages; answer accuracy is correct answers divided by answered responses. Blank responses are excluded from answer accuracy while counting as unanswered quiz points. Topic suggestions are marked provisional until at least three responses are recorded for that topic; topics below 60% accuracy after that threshold are marked for review. Quiz review and analytics do not call Gemini.
 - Flashcard review events and scheduling state are stored in the same local SQLite database. Flashcard success rate counts Hard, Good, and Easy self-ratings divided by all ratings; it is self-reported recall, not an objective score or a guarantee of mastery. Generated flashcards require the configured or personal Gemini key; manual cards, deck management, due queues, review, and saved-card history work without a Gemini key or embedding model.
+
+## Study Planner and exam revision calendar
+
+Open **Study Planner** from the sidebar or dashboard. Create a subject first, then add topics or chapters with estimated effort (minutes), priority (1–5), and optionally an upcoming exam. Topics can exist without a PDF. The optional PDF source keeps its document ID and filename; if its document is later deleted, the topic and saved filename remain and the foreign-key reference becomes empty. Subject archive hides it from active planning while preserving related exams, topics, tasks, sessions, and quiz/flashcard history.
+
+Add exams with a required subject and date; start time, location, and notes are optional. Exams can be edited, marked completed, or archived. Archiving preserves related work. A date can be today or in the past; the calendar reports the relative day without shifting the saved date. Dates are calendar dates interpreted on the computer running Streamlit (the local host timezone). Saved activity/session timestamps include the host's local UTC offset. There is no external calendar sync or cross-timezone conversion.
+
+In **Plan settings**, configure a daily goal (0 disables the goal), available minutes on selected days, preferred study days, and a per-day task limit. Unselected days are rest days and the planner will not allocate work to them. Defaults are a 60-minute goal, 120 minutes available, Monday through Friday selected, and a four-task daily limit; weekends start as rest days.
+
+For an exam with associated topics, choose **Build revision plan preview**. The deterministic local algorithm sorts topics by priority (high first), allocates chunks of up to 45 minutes across eligible days, observes existing planned workload and task caps, and offers a short final-recall task when capacity permits. It excludes the exam date and later dates. Review the proposed tasks and any reported unscheduled minutes, then explicitly save. Capacity is an estimate, not a guarantee of exam success. If time is insufficient, the planner reports the remaining effort; increase available study time/days, adjust topic estimates, or plan manually. No Gemini key, OCR, FAISS index, or embedding model is needed.
+
+Create tasks manually or from a proposed plan. Tasks can link to a subject/topic, upcoming exam, existing PDF, and existing quiz. Planned tasks can be edited, rescheduled, completed, canceled, or marked missed when overdue. Completing from a task records the actual session and completes the task atomically. Completed tasks retain their completion timestamp if reopened. Canceled tasks remain in history and are not counted as completed. The missed-work preview places selected overdue/missed incomplete tasks on configured study days before their related exam, within availability and task limits; **Apply these changes** is the explicit confirmation. Completed tasks and exam dates are not modified. Work that does not fit is listed.
+
+The daily view shows actual due/overdue flashcard counts as a recommendation, read from the existing flashcard schedule. Merely viewing the planner does not modify due dates or intervals and does not create recurring recommendation tasks. The planner also surfaces only quiz topics that existing progress analytics mark for review based on saved responses; it does not regenerate quizzes or change attempt scores. Use **Revise flashcards** or **Practice quiz** task types to plan sessions and optionally link existing material.
+
+Record a session from a task with actual minutes and an optional note, or add a standalone session with optional subject, topic, and exam links. Study history lists saved sessions. Progress distinguishes estimated planned minutes from actual recorded session minutes, and counts task completion only for completed tasks (not canceled tasks). Session records, subjects, topics, exams, tasks, and planner settings are stored in additive `planner_*` tables in the same local `study_assistant.db` described below. Planner tables do not contain PDF text or API keys. All planner workflows work without Gemini.
 - A missing key produces setup guidance and does not prevent the dashboard, settings, progress page, local document library, or manual flashcard workflows from opening.
 
 When an AI request runs, the current prompt and the data needed for that request are sent to Google's Gemini service. General chat sends no document text. Document chat sends only locally retrieved passages within the configured context budget; it does not send the full PDF or extracted document text. Semantic search embeds queries locally and does not call Gemini. Embedding inference and FAISS search run on the local CPU. Treat local chat history, uploaded documents, and the SQLite database as sensitive; they stay on this device unless you use a Gemini study tool.

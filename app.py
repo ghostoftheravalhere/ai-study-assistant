@@ -11,6 +11,7 @@ from pages.documents import render_documents
 from pages.document_search import render_document_search
 from pages.progress import render_progress
 from pages.flashcards import render_flashcards
+from pages.planner import render_planner
 from pages.question_generator import render_question_generator
 from pages.quiz import render_quiz
 from pages.settings import render_settings
@@ -54,6 +55,7 @@ def main() -> None:
         "Question Generator": render_question_generator,
         "Practice Quiz": render_quiz,
         "Flashcards": render_flashcards,
+        "Study Planner": render_planner,
         "Study Progress": render_progress,
         "Settings": render_settings,
     }

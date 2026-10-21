@@ -5,6 +5,7 @@ import streamlit as st
 from utils.quiz_logic import MIN_TOPIC_SAMPLE, calculate_progress_analytics
 from utils.quiz_repository import get_progress_records
 from utils.flashcard_repository import get_flashcard_stats
+from utils.planner_service import get_planner_metrics
 
 
 def _render_flashcard_progress() -> None:
@@ -23,6 +24,21 @@ def _render_flashcard_progress() -> None:
         st.warning(f"Flashcard statistics could not be loaded: {error}")
 
 
+def _render_planner_progress() -> None:
+    st.divider()
+    st.subheader("Study planner · recorded time")
+    try:
+        data = get_planner_metrics()
+        columns = st.columns(4)
+        columns[0].metric("Planned today", f"{data['planned_minutes']} min")
+        columns[1].metric("Completed study today", f"{data['completed_minutes']} min")
+        columns[2].metric("Tasks completed this week", data["tasks_completed_week"])
+        columns[3].metric("Overdue tasks", data["overdue_tasks"])
+        st.caption(f"Today's scheduled-task completion rate: {data['completion_rate']:.1f}%. Planned minutes are estimates; completed minutes come only from recorded study sessions. Canceled tasks are excluded.")
+    except Exception as error:
+        st.warning(f"Study planner metrics could not be loaded: {error}")
+
+
 def render_progress() -> None:
     st.markdown('<div class="eyebrow">YOUR LEARNING JOURNEY</div>', unsafe_allow_html=True)
     st.markdown('<h1 class="page-title">Study Progress</h1>', unsafe_allow_html=True)
@@ -36,6 +52,7 @@ def render_progress() -> None:
     if not analytics["completed_attempts"]:
         st.markdown('<div class="empty-state"><div class="empty-icon">↗</div><strong>Your progress starts here</strong><p>Submit a quiz to see your scores, answer accuracy, and topic insights. In-progress and cancelled attempts are not included.</p></div>', unsafe_allow_html=True)
         _render_flashcard_progress()
+        _render_planner_progress()
         return
 
     latest = analytics["trend"][-1]
@@ -79,3 +96,4 @@ def render_progress() -> None:
         )
 
     _render_flashcard_progress()
+    _render_planner_progress()
