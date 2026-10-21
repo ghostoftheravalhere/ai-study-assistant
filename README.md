@@ -10,7 +10,7 @@ AI Study Assistant is a diploma engineering project that brings document-based q
 
 Phase 11 adds deployment diagnostics, safer startup and migration handling, and automated CI. System Health reports optional-feature status separately from core readiness.
 
-- Responsive Streamlit dashboard with custom CSS and working sidebar navigation.
+- Responsive Streamlit dashboard with branded custom navigation, light theme by default, and theme-aware dark mode.
 - Four dashboard metrics based only on recorded local activity. New installations show zero counts and no average score until real activity exists.
 - Quick actions and feature cards for the study tools.
 - SQLite records for study activity, documents, and saved AI chat conversations.
@@ -58,7 +58,7 @@ ai-study-assistant/
 │   ├── dashboard.py
 │   ├── document_picker.py
 │   └── sidebar.py
-├── pages/
+├── study_pages/
 │   ├── ai_chat.py
 │   ├── flashcards.py
 │   ├── documents.py
@@ -108,6 +108,8 @@ ai-study-assistant/
 ├── requirements.txt
 └── requirements-dev.txt
 ```
+
+StudyMate renders all workflows through its branded sidebar and dispatcher in `app.py`. Page renderers live in `study_pages/`, outside Streamlit's reserved `pages/` directory, so they are not discovered as a second set of routes. The checked-in `.streamlit/config.toml` sets the default light palette; the app's CSS uses Streamlit theme variables so dark appearance remains readable when selected in Streamlit's appearance menu. Restart Streamlit after editing the theme configuration for changes to take effect.
 
 ## Configure Gemini
 

@@ -14,9 +14,9 @@ NAVIGATION = [
     ("Flashcards", "▧"),
     ("Study Planner", "▦"),
     ("Data Management", "⇩"),
-    ("System Health", "◉"),
     ("Study Progress", "↗"),
     ("Settings", "⚙"),
+    ("System Health", "◉"),
 ]
 
 

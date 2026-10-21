@@ -169,7 +169,7 @@ def test_pre_phase8_document_page_assessment_is_backfilled_lazily(ocr_env):
 
 def test_document_library_exposes_explicit_ocr_action_and_reports_completion(ocr_env, monkeypatch):
     from streamlit.testing.v1 import AppTest
-    from pages import documents as documents_page
+    from study_pages import documents as documents_page
 
     saved = save_uploaded_pdf("visible-scan.pdf", scan_pdf())
     original_runner = run_document_ocr

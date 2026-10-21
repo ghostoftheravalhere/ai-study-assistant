@@ -104,7 +104,7 @@ def make_failover_service(
 def test_app_and_ai_pages_import_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     assert not is_gemini_configured()
-    for module_name in ("app", "pages.ai_chat", "pages.summarizer", "pages.question_generator"):
+    for module_name in ("app", "study_pages.ai_chat", "study_pages.summarizer", "study_pages.question_generator"):
         assert importlib.import_module(module_name)
 
 
