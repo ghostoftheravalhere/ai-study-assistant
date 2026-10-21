@@ -71,8 +71,8 @@ def _render_setup() -> None:
     if document is None:
         _render_history()
         return
-    if document["extraction_status"] != "ready" or not document["extracted_text"].strip():
-        st.warning("This PDF has no selectable text for quiz generation. OCR is not supported.")
+    if not document.get("text_ready", document["extraction_status"] == "ready") or not document["extracted_text"].strip():
+        st.warning("This PDF has no usable native or OCR text for quiz generation. Run local OCR from My Documents if scanned pages were detected.")
         _render_history()
         return
 

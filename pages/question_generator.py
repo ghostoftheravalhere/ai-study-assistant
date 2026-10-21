@@ -25,8 +25,8 @@ def render_question_generator() -> None:
     document = render_document_picker("Question source document", key="questions")
     if document is None:
         return
-    if document["extraction_status"] != "ready" or not document["extracted_text"].strip():
-        st.warning("This document has no selectable text for question generation. OCR is not supported yet.")
+    if not document.get("text_ready", document["extraction_status"] == "ready") or not document["extracted_text"].strip():
+        st.warning("This document has no usable native or OCR text for question generation. Run local OCR from My Documents if scanned pages were detected.")
         return
 
     st.write(f"**Selected document:** {document['original_filename']}")
@@ -44,7 +44,7 @@ def render_question_generator() -> None:
         include_explanations = st.checkbox("Include explanations", value=True)
 
     st.caption(
-        f"Model: {load_gemini_model()} · Only this PDF's extracted text is sent to Google Gemini."
+        f"Model: {load_gemini_model()} · Only this PDF's effective text is sent to Google Gemini. OCR itself runs locally."
     )
     if not is_gemini_available_for_session():
         st.info("Choose API Settings to activate a personal Gemini API key or switch to configured application keys.")

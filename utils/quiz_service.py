@@ -33,7 +33,7 @@ def generate_document_quiz(
 ) -> GeneratedQuiz:
     """Use relevant indexed passages when available, otherwise bounded PDF text."""
     document_id = str(document["id"])
-    document_text = str(document.get("extracted_text", ""))
+    document_text = str(document.get("effective_text") or document.get("extracted_text", ""))
     if not document_text.strip():
         raise ValueError("This document does not contain selectable study text.")
 

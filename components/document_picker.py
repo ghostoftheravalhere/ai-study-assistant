@@ -2,7 +2,8 @@
 
 import streamlit as st
 
-from utils.documents import DocumentError, get_document, list_documents
+from utils.document_text_service import get_effective_document
+from utils.documents import DocumentError, list_documents
 
 
 def render_document_picker(label: str, *, key: str) -> dict | None:
@@ -31,15 +32,20 @@ def render_document_picker(label: str, *, key: str) -> dict | None:
         key=state_key,
     )
     try:
-        document = get_document(selected_id)
+        document = get_effective_document(selected_id)
     except DocumentError as error:
         st.error(str(error))
         return None
     if document is None:
         st.warning("That document is no longer in your library. Refresh and choose another document.")
         return None
-    st.caption(
-        f"{document['page_count']} pages · {document['uploaded_at']} · "
-        f"{'Text ready' if document['extraction_status'] == 'ready' else 'No selectable text'}"
-    )
+    sources = {page.source for page in document["effective_pages"] if page.text.strip()}
+    source_label = "OCR and native text" if sources == {"native", "ocr"} else "OCR text" if sources == {"ocr"} else "Native text" if "native" in sources else "No usable text"
+    pending_ocr = sum(document["ocr_status_counts"].get(status, 0) for status in ("pending", "failed", "empty"))
+    st.caption(f"{document['page_count']} pages · {document['uploaded_at']} · {source_label}" + (f" · {pending_ocr} page(s) still need OCR" if pending_ocr else ""))
+    if "ocr" in sources:
+        st.caption("Recognized text may contain OCR errors. Verify formulas, tables, handwriting, and low-quality scans against the PDF.")
+    if not document["text_ready"]:
+        st.warning("No usable native or recognized text is available. Run local OCR from My Documents if scanned pages were detected.")
+    document["extracted_text"] = document["effective_text"]
     return document

@@ -111,8 +111,8 @@ def render_ai_chat() -> None:
             return
         source_document_id = selected_document["id"]
         status = status_by_id.get(source_document_id, {}).get("status", "not_indexed")
-        if selected_document["extraction_status"] != "ready" or status == "no_text":
-            st.warning("This PDF has no selectable text. OCR is not implemented, so it cannot be semantically indexed.")
+        if not selected_document.get("text_ready", selected_document["extraction_status"] == "ready") or status == "no_text":
+            st.warning("This PDF has no usable native or OCR text for semantic indexing. Run local OCR from My Documents if scanned pages were detected.")
             return
         if status != "indexed":
             st.warning(f"This PDF is {status.replace('_', ' ')} and is not available for document chat yet.")

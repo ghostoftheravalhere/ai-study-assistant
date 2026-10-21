@@ -157,7 +157,7 @@ def select_document_context(
 ) -> ContextSelection:
     """Use a deterministic leading-text window; this is not semantic retrieval."""
     if not document_text or not document_text.strip():
-        raise GeminiServiceError("This document has no selectable text. OCR is not available in this phase.")
+        raise GeminiServiceError("This document has no usable native or OCR study text. Run local OCR from My Documents for scanned pages.")
     if max_chars < 1:
         raise ValueError("Context character limit must be positive.")
     text = document_text.strip()

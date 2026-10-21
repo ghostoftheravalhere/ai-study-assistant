@@ -47,3 +47,7 @@ CHUNK_OVERLAP_CHARS = min(
 )
 RETRIEVAL_TOP_K = _positive_int_setting("STUDY_ASSISTANT_RETRIEVAL_TOP_K", 5)
 MAX_RETRIEVAL_TOP_K = 10
+OCR_DPI = max(72, min(_positive_int_setting("STUDY_ASSISTANT_OCR_DPI", 275), 300))
+OCR_LANGUAGE = os.environ.get("STUDY_ASSISTANT_OCR_LANG", "eng").strip() or "eng"
+TESSERACT_CMD = os.environ.get("STUDY_ASSISTANT_TESSERACT_CMD", "").strip()
+OCR_MIN_NATIVE_CHARS = _positive_int_setting("STUDY_ASSISTANT_OCR_MIN_NATIVE_CHARS", 30)

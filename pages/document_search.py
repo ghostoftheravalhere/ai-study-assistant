@@ -16,7 +16,10 @@ def render_document_search() -> None:
     documents = get_document_index_statuses()
     indexed = [item for item in documents if item["status"] == "indexed"]
     if not indexed:
-        st.info("No PDFs are indexed yet. Open My Documents and choose Index documents. The model downloads on the first indexing run.")
+        stale = sum(item["status"] == "out_of_date" for item in documents)
+        if stale:
+            st.warning(f"{stale} document index(es) are stale, including any text changed by OCR. Reindex in My Documents before searching so old passages are not used.")
+        st.info("No current PDFs are indexed yet. Open My Documents and choose Index documents. The model downloads on the first indexing run.")
         if st.button("Open My Documents", key="search_open_documents"):
             st.session_state.active_page = "My Documents"
             st.rerun()

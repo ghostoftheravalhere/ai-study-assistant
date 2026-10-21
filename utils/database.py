@@ -116,6 +116,25 @@ def initialize_database() -> None:
             connection.execute("CREATE INDEX IF NOT EXISTS idx_document_chunks_document ON document_chunks(document_id)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_document_chunks_model ON document_chunks(embedding_model, embedding_dimension)")
             connection.execute(
+                """CREATE TABLE IF NOT EXISTS document_ocr_pages (
+                    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                    page_number INTEGER NOT NULL CHECK (page_number > 0),
+                    status TEXT NOT NULL CHECK (status IN ('native_text', 'pending', 'blank', 'not_needed', 'complete', 'empty', 'failed')),
+                    recognized_text TEXT NOT NULL DEFAULT '',
+                    language TEXT,
+                    dpi INTEGER,
+                    engine_version TEXT,
+                    confidence REAL,
+                    recognized_at TEXT,
+                    last_error TEXT,
+                    PRIMARY KEY(document_id, page_number)
+                )"""
+            )
+            ocr_columns = {row[1] for row in connection.execute("PRAGMA table_info(document_ocr_pages)")}
+            if "dpi" not in ocr_columns:
+                connection.execute("ALTER TABLE document_ocr_pages ADD COLUMN dpi INTEGER")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_document_ocr_status ON document_ocr_pages(document_id, status, page_number)")
+            connection.execute(
                 """INSERT OR IGNORE INTO document_index_status (document_id, status)
                    SELECT id, 'not_indexed' FROM documents"""
             )

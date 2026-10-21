@@ -10,7 +10,7 @@ from typing import Any
 
 from utils.config import DOCUMENTS_DIR, MAX_UPLOAD_SIZE_BYTES, MAX_UPLOAD_SIZE_MB
 from utils.database import get_connection
-from utils.pdf_processing import PDFProcessingError, extract_pdf_text
+from utils.pdf_processing import PDFProcessingError, assess_pdf_pages, extract_pdf_text
 
 
 class DocumentError(ValueError):
@@ -73,6 +73,46 @@ def get_document(document_id: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def get_ocr_page_status(document_id: str) -> dict[str, int]:
+    """Return persisted per-page OCR states without loading PDF or OCR engines."""
+    try:
+        with get_connection() as connection:
+            rows = connection.execute(
+                "SELECT status, COUNT(*) AS count FROM document_ocr_pages WHERE document_id=? GROUP BY status",
+                (document_id,),
+            ).fetchall()
+    except sqlite3.Error as error:
+        raise DocumentError("OCR page status could not be read from the local database.") from error
+    return {row["status"]: int(row["count"]) for row in rows}
+
+
+def assess_stored_document_pages(document_id: str) -> dict[str, int]:
+    """Lazily backfill per-page OCR eligibility for documents uploaded pre-Phase 8."""
+    document = get_document(document_id)
+    if document is None:
+        raise DocumentError("That document is no longer in the library.")
+    try:
+        with get_connection() as connection:
+            assessed_count = connection.execute(
+                "SELECT COUNT(*) FROM document_ocr_pages WHERE document_id=?", (document_id,)
+            ).fetchone()[0]
+    except sqlite3.Error as error:
+        raise DocumentError("OCR page assessment could not be read from the local database.") from error
+    if assessed_count == document["page_count"]:
+        return get_ocr_page_status(document_id)
+    try:
+        path = _stored_path(document["stored_filename"])
+        _, pages = assess_pdf_pages(path.read_bytes())
+        with get_connection() as connection:
+            connection.executemany(
+                "INSERT INTO document_ocr_pages(document_id,page_number,status) VALUES(?,?,?) ON CONFLICT(document_id,page_number) DO NOTHING",
+                [(document_id, page.page_number, page.status) for page in pages],
+            )
+    except (OSError, PDFProcessingError, sqlite3.Error) as error:
+        raise DocumentError("This PDF's pages could not be checked for local OCR. Verify that it is readable and retry.") from error
+    return get_ocr_page_status(document_id)
+
+
 def save_uploaded_pdf(original_filename: str, file_bytes: bytes) -> dict[str, Any]:
     """Validate, extract, store, and persist an uploaded PDF."""
     if not original_filename.lower().endswith(".pdf"):
@@ -84,6 +124,7 @@ def save_uploaded_pdf(original_filename: str, file_bytes: bytes) -> dict[str, An
 
     try:
         extraction = extract_pdf_text(file_bytes)
+        page_assessments = extraction.page_assessments
     except PDFProcessingError as error:
         raise DocumentError(str(error)) from error
 
@@ -122,6 +163,10 @@ def save_uploaded_pdf(original_filename: str, file_bytes: bytes) -> dict[str, An
                     extraction.extracted_text,
                     content_hash,
                 ),
+            )
+            connection.executemany(
+                "INSERT INTO document_ocr_pages(document_id,page_number,status) VALUES(?,?,?)",
+                [(document_id, item.page_number, item.status) for item in page_assessments],
             )
     except sqlite3.IntegrityError as error:
         _discard_partial_file(stored_path)

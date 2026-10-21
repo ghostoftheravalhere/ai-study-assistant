@@ -13,7 +13,8 @@ from utils.config import CHUNK_OVERLAP_CHARS, CHUNK_SIZE_CHARS, EMBEDDING_MODEL_
 from utils.database import get_connection
 from utils.documents import resolve_stored_document_path
 from utils.embedding_service import EmbeddingModelError, EmbeddingService
-from utils.pdf_processing import PDFProcessingError, extract_pdf_pages
+from utils.pdf_processing import PDFProcessingError
+from utils.document_text_service import get_effective_pages
 from utils.vector_store import VectorRecord, VectorStore
 
 
@@ -64,7 +65,15 @@ def get_document_index_statuses() -> list[dict]:
         if not source_exists:
             item["status"] = "missing_source"
         elif item["extraction_status"] == "no_text":
-            item["status"] = "no_text"
+            with get_connection() as connection:
+                has_ocr = connection.execute(
+                    "SELECT 1 FROM document_ocr_pages WHERE document_id=? AND status='complete' AND length(trim(recognized_text))>0 LIMIT 1",
+                    (item["id"],),
+                ).fetchone()
+            if not has_ocr:
+                item["status"] = "no_text"
+            elif item["status"] in {None, "no_text"}:
+                item["status"] = "not_indexed"
         elif item["status"] is None:
             item["status"] = "not_indexed"
         elif item["status"] == "indexed" and (
@@ -184,9 +193,10 @@ def index_document(
             error_message="The stored PDF no longer matches its library record.",
         )
         raise IndexingError(f"{filename}: the stored PDF does not match its library record.")
-    if document["extraction_status"] == "no_text":
+    effective_pages = get_effective_pages(document_id)
+    if document["extraction_status"] == "no_text" and not any(page.text.strip() for page in effective_pages):
         _store_status(document_id, "no_text", source_hash=source_hash, model_name=model_name, config_hash=config_hash)
-        return IndexingResult(document_id, filename, "no_text", 0, message="No selectable text was found; OCR is not available.")
+        return IndexingResult(document_id, filename, "no_text", 0, message="No usable native or OCR text is available to index.")
 
     existing = _current_record(document_id)
     if (
@@ -204,8 +214,7 @@ def index_document(
 
     service = embedding_service or EmbeddingService(model_name)
     try:
-        _, extracted_pages = extract_pdf_pages(file_bytes)
-        pages = [PageText(page.page_number, page.text) for page in extracted_pages]
+        pages = [PageText(page.page_number, page.text) for page in effective_pages if page.text.strip()]
         chunks = chunk_pages(
             document_id,
             pages,
@@ -214,7 +223,7 @@ def index_document(
         )
         if not chunks:
             _store_status(document_id, "no_text", source_hash=source_hash, model_name=model_name, config_hash=config_hash)
-            return IndexingResult(document_id, filename, "no_text", 0, message="No selectable text was found; OCR is not available.")
+            return IndexingResult(document_id, filename, "no_text", 0, message="No usable native or OCR text is available to index.")
 
         vectors = []
         batch_size = 32
@@ -290,7 +299,7 @@ def index_pending_documents(
     eligible = [
         item for item in get_document_index_statuses()
         if item["status"] in {"not_indexed", "out_of_date", "failed"}
-        and item["extraction_status"] == "ready"
+        and (item["extraction_status"] == "ready" or item["status"] != "no_text")
     ]
     results: list[IndexingResult] = []
     service = embedding_service

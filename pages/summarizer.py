@@ -26,8 +26,8 @@ def render_summarizer() -> None:
     document = render_document_picker("Document to summarize", key="summary")
     if document is None:
         return
-    if document["extraction_status"] != "ready" or not document["extracted_text"].strip():
-        st.warning("This document has no selectable text to summarize. OCR is not supported yet.")
+    if not document.get("text_ready", document["extraction_status"] == "ready") or not document["extracted_text"].strip():
+        st.warning("This document has no usable native or OCR text to summarize. Run local OCR from My Documents if scanned pages were detected.")
         return
 
     st.write(f"**Selected document:** {document['original_filename']}")
@@ -40,7 +40,7 @@ def render_summarizer() -> None:
         and previous["format"] == summary_format
     )
     st.caption(
-        f"Model: {load_gemini_model()} · The selected PDF's extracted text is sent to Google Gemini."
+        f"Model: {load_gemini_model()} · The selected PDF's effective text is sent to Google Gemini. OCR itself runs locally."
     )
     if not is_gemini_available_for_session():
         st.info("Choose API Settings to activate a personal Gemini API key or switch to configured application keys. No key is needed to browse PDFs.")

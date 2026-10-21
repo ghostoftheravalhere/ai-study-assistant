@@ -6,7 +6,7 @@ AI Study Assistant is a diploma engineering project that will bring document-bas
 
 ## Implemented features
 
-**Phases 6 and 7 are complete:** interactive quizzes, saved attempt review, smart flashcards, spaced repetition, and local study progress analytics are available below.
+**Phases 6–8 are complete:** quizzes, flashcards, spaced repetition, progress analytics, and local OCR for scanned PDFs are available below.
 
 - Responsive Streamlit dashboard with custom CSS and working sidebar navigation.
 - Four dashboard metrics based only on recorded local activity. New installations show zero counts and no average score until real activity exists.
@@ -17,7 +17,7 @@ AI Study Assistant is a diploma engineering project that will bring document-bas
 - Page-by-page text extraction using PyMuPDF, with page boundaries retained.
 - Local document library with persisted metadata, extracted text, duplicate detection, text preview, and confirmed deletion.
 - Dashboard document count based on PDFs actually stored in the library.
-- Scanned or image-only PDFs are identified when no embedded selectable text is found; OCR is not supported.
+- Scanned and mixed PDFs are assessed page by page; local OCR is available for likely image-based pages.
 - General and document-grounded Gemini study chat with locally saved conversations and messages.
 - Local semantic document search over page-aware PDF chunks using Sentence Transformers and FAISS.
 - Rebuildable FAISS cache with vectors and index status persisted in the local SQLite database.
@@ -29,12 +29,14 @@ AI Study Assistant is a diploma engineering project that will bring document-bas
 - Manual and Gemini-proposed flashcards organized in persistent decks, with editable review-before-save proposals and PDF source references.
 - Active recall sessions with AGAIN, HARD, GOOD, and EASY ratings, deterministic spaced repetition, daily new-card limits, and append-only local review history.
 - Successful AI operations, including flashcard proposal generation, appear in recent activity without storing prompts, document contents, or generated results there.
+- Local Tesseract OCR for selected scanned PDF pages, with page-aware text, retryable status, and native-text preservation.
 
 ## Technology
 
 - Python 3.10 or newer
 - Streamlit
 - PyMuPDF (PDF validation and text extraction)
+- pytesseract (Python bridge to a separately installed local Tesseract executable)
 - `google-genai` (official Google Gen AI Python SDK)
 - SQLite (Python standard library)
 - Custom CSS
@@ -64,6 +66,7 @@ ai-study-assistant/
 ├── tests/
 │   ├── test_ai_tools.py
 │   ├── test_flashcards.py
+│   ├── test_ocr.py
 │   ├── test_quiz.py
 │   └── test_documents.py
 ├── utils/
@@ -75,9 +78,11 @@ ai-study-assistant/
 │   ├── config.py
 │   ├── database.py
 │   ├── documents.py
+│   ├── document_text_service.py
 │   ├── gemini_service.py
 │   ├── embedding_service.py
 │   ├── indexing_service.py
+│   ├── ocr_service.py
 │   ├── retrieval_service.py
 │   ├── vector_store.py
 │   └── pdf_processing.py
@@ -180,6 +185,26 @@ The app opens in your browser, usually at `http://localhost:8501`. No `.env` fil
 
 Open **My Documents**, select one or more PDF files, then choose **Upload selected PDFs**. Files are limited to 20 MB each by default. Uploaded PDFs are validated, their text is extracted, and the file and text are saved locally for later use. Open a document in the library to review its metadata and extracted text. Select the confirmation checkbox before deleting a document.
 
+### Local OCR for scanned PDFs
+
+Text assessment happens per page during upload. Pages with enough selectable text use that native text; pages with a substantial image and too little native text are marked for OCR. Blank pages and small decorative images are not automatically OCRed. Upload never starts OCR.
+
+Install the separate Tesseract engine on Windows using the [UB Mannheim Windows installer](https://github.com/UB-Mannheim/tesseract/wiki), a distribution recommended by the [Tesseract installation guide](https://tesseract-ocr.github.io/tessdoc/Installation.html). Select English (`eng`) or the desired language data during setup. Additional language `.traineddata` files are available from the [official Tesseract language-data repository](https://github.com/tesseract-ocr/tessdata) and must be installed in Tesseract's `tessdata` directory; StudyMate reports missing language data before processing. Tesseract is not installed by pip, and the Python `pytesseract` package alone is insufficient.
+
+If the executable is not on PATH, set its full path before launching Streamlit:
+
+```powershell
+$env:STUDY_ASSISTANT_TESSERACT_CMD = "C:\Program Files\Tesseract-OCR\tesseract.exe"
+$env:STUDY_ASSISTANT_OCR_LANG = "eng"
+streamlit run app.py
+```
+
+For multiple installed languages, use a plus-separated code such as `eng+fra`. In **My Documents**, open a document and choose **Run local OCR**. OCR runs only for pages flagged for scanning, failed pages, or pages explicitly reprocessed after a language or resolution setting changes. The display reports completed, empty, and failed pages; failed and empty attempts can be retried, while successful prior text remains saved if a retry fails. The original PDF is never changed. OCR uses PyMuPDF rendering at 275 DPI by default, capped at 300 DPI and 25 megapixels per rendered page; configure `STUDY_ASSISTANT_OCR_DPI` (72–300) if needed. Temporary images stay in memory.
+
+Recognized text is stored in SQLite per PDF page with language, engine version, status, and timestamp. Native extracted text remains intact. StudyMate prefers usable native page text and substitutes successful OCR text for pages with insufficient native text; page labels retain original PDF page numbers. The preview labels OCR pages. After OCR changes text, the semantic index becomes stale and is excluded from retrieval until you choose **Reindex**. OCR itself does not load Sentence Transformers, FAISS, or Gemini. Once indexed, OCR-derived passages can be used by semantic search and document chat; summaries, generated questions, quizzes, and flashcard proposals use the shared effective text and preserve page markers where citations are supported.
+
+OCR can misread similar characters, equations, tables, handwriting, rotated content, and low-quality scans. It does not provide reliable handwriting recognition or a guaranteed confidence score. Review recognized text against the PDF. OCR is local, but later Gemini study requests may send the relevant effective text or retrieved passages to Google under the existing context limits and API-key selection rules.
+
 ### Local database and document storage
 
 - The existing SQLite database stays at `study_assistant.db` in the project folder by default so Phase 1 activity data is preserved.
@@ -194,6 +219,10 @@ Open **My Documents**, select one or more PDF files, then choose **Upload select
   - `STUDY_ASSISTANT_EMBEDDING_MODEL`: Sentence Transformers model identifier (default `sentence-transformers/all-MiniLM-L6-v2`). Changing this makes existing indexes stale and requires reindexing.
   - `STUDY_ASSISTANT_CHUNK_SIZE_CHARS` / `STUDY_ASSISTANT_CHUNK_OVERLAP_CHARS`: page-local chunk sizing (defaults `1200` / `200`); changes require reindexing.
   - `STUDY_ASSISTANT_RETRIEVAL_TOP_K`: default passages retrieved for document chat/search (default `5`, maximum `10`).
+  - `STUDY_ASSISTANT_TESSERACT_CMD`: optional full path to `tesseract.exe` if it is not on PATH.
+  - `STUDY_ASSISTANT_OCR_LANG`: installed Tesseract language codes (default `eng`; combine with `+`).
+  - `STUDY_ASSISTANT_OCR_DPI`: local rendering resolution (default `275`, clamped to 72–300 DPI).
+  - `STUDY_ASSISTANT_OCR_MIN_NATIVE_CHARS`: per-page minimum native text used during scan assessment (default `30`).
 
 For example, set an option for the current PowerShell session before launching:
 
@@ -216,7 +245,7 @@ pytest
 - Quiz questions depend on Gemini generation quality; invalid or duplicate generated questions are discarded, and at least five valid questions are needed to save a quiz. Source page references are limited to pages present in the supplied PDF passages.
 - Quiz timers are enforced by the local application session and saved start time; they are intended for study practice, not proctored or tamper-proof exams.
 - Spaced repetition is a transparent SM-2-inspired heuristic. Flashcard ratings are self-reported recall and do not verify mastery or guarantee retention; due-date day boundaries follow the local timezone of the app host.
-- Scanned PDFs without an embedded text layer cannot be read because OCR is not implemented.
+- OCR quality depends on scan clarity and installed Tesseract language data. It may misread handwriting, formulas, tables, and distorted pages; manual verification is recommended.
 - Very large PDFs may take time to process; each upload is limited to 20 MB by default.
 - Embeddings use an English sentence model and need a one-time model download; multilingual retrieval quality may be limited. Indexing runs on CPU and can take time for large libraries.
 - Similarity scores rank passages; they are not confidence probabilities. Gemini citations are checked against retrieved source/page pairs, but generated answers can still misinterpret evidence.
@@ -233,5 +262,6 @@ pytest
 5. **Phase 5 — BYOK:** complete — session-only personal Gemini keys, explicit connection testing, and application-key selection.
 6. **Phase 6 — Practice and progress:** complete — interactive quizzes, scoring, answer review, and local study progress insights.
 7. **Phase 7 — Flashcards:** complete — persistent decks and cards, PDF-generated proposals, active recall, local spaced repetition, and review analytics.
+8. **Phase 8 — Local OCR:** complete — page-aware Tesseract OCR for scanned and mixed PDFs, safe retries, semantic reindexing, and connected study tools.
 
 All phases will continue in this repository.

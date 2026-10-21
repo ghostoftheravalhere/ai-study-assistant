@@ -317,8 +317,8 @@ def _render_generate_creation() -> None:
     document = render_document_picker("Study source PDF", key="flashcards")
     if document is None:
         return
-    if document["extraction_status"] != "ready" or not document["extracted_text"].strip():
-        st.warning("This PDF has no selectable text for generation. OCR is not supported.")
+    if not document.get("text_ready", document["extraction_status"] == "ready") or not document["extracted_text"].strip():
+        st.warning("This PDF has no usable native or OCR text for generation. Run local OCR from My Documents if scanned pages were detected.")
         return
     deck_titles = {deck["id"]: deck["title"] for deck in decks}
     with st.form("flashcard_generate_form"):

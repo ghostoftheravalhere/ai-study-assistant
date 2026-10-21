@@ -2,8 +2,9 @@
 
 import streamlit as st
 
-from utils.config import MAX_UPLOAD_SIZE_MB
-from utils.documents import DocumentError, delete_document, get_document, list_documents, save_uploaded_pdf
+from utils.config import MAX_UPLOAD_SIZE_MB, OCR_LANGUAGE
+from utils.documents import DocumentError, assess_stored_document_pages, delete_document, get_ocr_page_status, list_documents, save_uploaded_pdf
+from utils.document_text_service import get_effective_document
 from utils.indexing_service import (
     IndexingError,
     get_document_index_statuses,
@@ -11,6 +12,7 @@ from utils.indexing_service import (
     index_pending_documents,
     rebuild_faiss_index,
 )
+from utils.ocr_service import OCRError, run_document_ocr
 
 
 _PREVIEW_CHAR_LIMIT = 24_000
@@ -27,7 +29,7 @@ def render_documents() -> None:
     st.markdown('<div class="eyebrow">YOUR STUDY LIBRARY</div>', unsafe_allow_html=True)
     st.markdown('<h1 class="page-title">My Documents</h1>', unsafe_allow_html=True)
     st.markdown(
-        '<p class="page-subtitle">Upload class PDFs and keep their searchable text ready for future study tools.</p>',
+        '<p class="page-subtitle">Upload PDFs, recognize scanned pages locally, and prepare text for study tools.</p>',
         unsafe_allow_html=True,
     )
 
@@ -50,10 +52,13 @@ def render_documents() -> None:
                 with st.spinner(f"Reading {uploaded_file.name}…"):
                     try:
                         saved = save_uploaded_pdf(uploaded_file.name, uploaded_file.getvalue())
-                        if saved["extraction_status"] == "no_text":
+                        detected = get_ocr_page_status(saved["id"])
+                        if detected.get("pending", 0):
+                            st.info(f"Added {uploaded_file.name} ({saved['page_count']} pages). {detected['pending']} page(s) appear image-based; run local OCR from the document card when ready.")
+                        elif saved["extraction_status"] == "no_text":
                             st.warning(
                                 f"{uploaded_file.name} was stored, but no selectable text was found. "
-                                "It may be scanned; OCR is not supported yet."
+                                "Scanned pages can be recognized locally from the document card below."
                             )
                         else:
                             st.success(f"Added {uploaded_file.name} ({saved['page_count']} pages).")
@@ -80,6 +85,11 @@ def render_documents() -> None:
             unsafe_allow_html=True,
         )
         return
+
+    with st.expander("About local OCR and Windows setup"):
+        st.write("OCR renders selected pages on this computer using Tesseract. It does not require Gemini or send pages to a cloud OCR service. Later Gemini tools may send relevant study text or retrieved passages to Google.")
+        st.markdown("1. Install [Tesseract for Windows from UB Mannheim](https://github.com/UB-Mannheim/tesseract/wiki), including English or other desired language data.\n2. If `tesseract.exe` is not on PATH, set `STUDY_ASSISTANT_TESSERACT_CMD` to its full path, for example `C:\\Program Files\\Tesseract-OCR\\tesseract.exe`, then restart StudyMate.\n3. Set `STUDY_ASSISTANT_OCR_LANG` to codes such as `eng` or `eng+fra`. Install every corresponding `.traineddata` language pack. See the [Tesseract installation guide](https://tesseract-ocr.github.io/tessdoc/Installation.html).\n4. Select **Run local OCR** on a document, then choose **Index / retry** or **Reindex** to add recognized pages to semantic search.")
+        st.warning("OCR can misread similar characters, formulas, math notation, tables, handwriting, rotated pages, and poor scans. Verify recognized text against the original PDF.")
 
     index_statuses = get_document_index_statuses()
     index_by_id = {item["id"]: item for item in index_statuses}
@@ -134,7 +144,58 @@ def render_documents() -> None:
             last_error = index_by_id.get(document["id"], {}).get("error_message")
             if last_error:
                 st.caption(f"Last indexing issue: {last_error}")
-            if document["extraction_status"] == "ready":
+            try:
+                ocr_status = assess_stored_document_pages(document["id"])
+            except DocumentError as error:
+                ocr_status = {}
+                st.warning(str(error))
+            pending_ocr = ocr_status.get("pending", 0) + ocr_status.get("failed", 0) + ocr_status.get("empty", 0)
+            complete_ocr = ocr_status.get("complete", 0)
+            if complete_ocr:
+                st.write(f"**OCR:** {complete_ocr} page(s) recognized" + (f" · {pending_ocr} page(s) still need attention" if pending_ocr else " · complete"))
+            elif pending_ocr:
+                st.write(f"**Extraction:** {pending_ocr} page(s) likely need local OCR")
+            elif document["extraction_status"] == "ready":
+                st.write("**Extraction:** native PDF text ready")
+            selected_language = st.text_input(
+                "OCR language code(s)", value=OCR_LANGUAGE, key=f"ocr_language_{document['id']}",
+                help="Use installed Tesseract codes, for example eng or eng+fra. Changing language or OCR resolution reprocesses completed pages when requested.",
+            ) if pending_ocr or complete_ocr else OCR_LANGUAGE
+            if pending_ocr or complete_ocr:
+                st.caption("OCR runs locally only after you choose this action. Failed pages can be retried; successful page text is preserved.")
+                label = f"Run local OCR · {pending_ocr} page(s)" if pending_ocr else "Reprocess OCR if language changed"
+                if st.button(label, key=f"run_ocr_{document['id']}", type="secondary"):
+                    progress = st.progress(0.0, text=f"Preparing local OCR for {document['original_filename']}…")
+                    notice = None
+                    try:
+                        with st.spinner("Recognizing selected PDF pages locally…"):
+                            result = run_document_ocr(
+                                document["id"],
+                                language=selected_language,
+                                progress_callback=lambda done, total: progress.progress(done / max(total, 1), text=f"OCR page {done} of {total}…"),
+                            )
+                        if result.failed or result.empty:
+                            message = f"OCR processed {result.processed} page(s): {result.succeeded} recognized, {result.empty} empty, {result.failed} failed. Completed page text was saved. " + " ".join(result.errors[:3])
+                            notice = {"kind": "warning", "message": message}
+                        elif result.processed:
+                            notice = {"kind": "success", "message": f"OCR recognized text on all {result.succeeded} processed page(s)."}
+                        else:
+                            notice = {"kind": "info", "message": "No pending pages needed OCR."}
+                        if result.remaining:
+                            notice["message"] += f" {result.remaining} page(s) still need OCR; retry is available."
+                    except OCRError as error:
+                        st.error(str(error))
+                    finally:
+                        progress.empty()
+                    if notice:
+                        st.session_state[f"ocr_notice_{document['id']}"] = notice
+                        st.rerun()
+
+            notice = st.session_state.pop(f"ocr_notice_{document['id']}", None)
+            if notice:
+                getattr(st, notice["kind"])(notice["message"])
+
+            if document["extraction_status"] == "ready" or complete_ocr:
                 action = "Reindex" if index_status == "indexed" else "Index / retry"
                 if st.button(action, key=f"index_document_{document['id']}"):
                     progress = st.progress(0.0, text=f"Preparing {document['original_filename']}…")
@@ -159,39 +220,31 @@ def render_documents() -> None:
                 ("File size", _format_file_size(document["file_size_bytes"])),
                 ("Pages", str(document["page_count"])),
                 ("Uploaded", document["uploaded_at"]),
-                ("Text extraction", "Ready" if document["extraction_status"] == "ready" else "No selectable text"),
+                ("Text extraction", "Native + OCR" if document["extraction_status"] == "ready" and complete_ocr else "OCR ready" if complete_ocr else "Native text" if document["extraction_status"] == "ready" else "OCR needed" if pending_ocr else "No usable text"),
             ]
             for column, (label, value) in zip(metadata_columns, metadata):
                 with column:
                     st.caption(label)
                     st.write(value)
 
-            if document["extraction_status"] == "no_text":
-                st.info("No selectable text was found. This may be a scanned PDF. OCR is not supported in this phase.")
-            else:
-                try:
-                    full_document = get_document(document["id"])
-                except DocumentError as error:
-                    st.error(str(error))
-                    full_document = None
-                if full_document:
-                    extracted_text = full_document["extracted_text"]
-                    preview_text = extracted_text[:_PREVIEW_CHAR_LIMIT]
-                    show_full = st.session_state.get(f"full_text_{document['id']}", False)
-                    visible_text = extracted_text if show_full else preview_text
-                    st.text_area(
-                        "Extracted text preview",
-                        value=visible_text,
-                        height=260,
-                        disabled=True,
-                        key=f"text_preview_{document['id']}",
-                    )
-                    if len(extracted_text) > _PREVIEW_CHAR_LIMIT and not show_full:
-                        if st.button("Load full extracted text", key=f"load_full_{document['id']}"):
-                            st.session_state[f"full_text_{document['id']}"] = True
-                            st.rerun()
-                    elif show_full and len(extracted_text) > _PREVIEW_CHAR_LIMIT:
-                        st.caption("Showing the full extracted text. Large documents may take longer to render.")
+            try:
+                full_document = get_effective_document(document["id"])
+            except (DocumentError, OSError):
+                st.error("The recognized document text could not be loaded safely.")
+                full_document = None
+            if full_document and full_document["text_ready"]:
+                blocks = [f"--- Page {page.page_number} · {'OCR' if page.source == 'ocr' else 'native text'} ---\n{page.text}" for page in full_document["effective_pages"] if page.text.strip()]
+                extracted_text = "\n\n".join(blocks)
+                preview_text = extracted_text[:_PREVIEW_CHAR_LIMIT]
+                show_full = st.session_state.get(f"full_text_{document['id']}", False)
+                visible_text = extracted_text if show_full else preview_text
+                st.text_area("Effective text preview · OCR pages are labeled", value=visible_text, height=260, disabled=True, key=f"text_preview_{document['id']}")
+                if len(extracted_text) > _PREVIEW_CHAR_LIMIT and not show_full:
+                    if st.button("Load full extracted text", key=f"load_full_{document['id']}"):
+                        st.session_state[f"full_text_{document['id']}"] = True
+                        st.rerun()
+            elif full_document:
+                st.info("No usable text is available yet. The PDF may be blank or contain only small images that were not classified as a scan.")
 
             if st.checkbox("I understand this permanently deletes this document", key=f"confirm_delete_{document['id']}"):
                 if st.button("Delete document", key=f"delete_{document['id']}", type="secondary"):

@@ -131,9 +131,9 @@ def generate_document_flashcards(
     gemini_service: GeminiService,
 ) -> GeneratedFlashcards:
     document_id = str(document["id"])
-    document_text = str(document.get("extracted_text", ""))
+    document_text = str(document.get("effective_text") or document.get("extracted_text", ""))
     if not document_text.strip():
-        raise ValueError("This PDF has no selectable study text.")
+        raise ValueError("This PDF has no usable native or OCR study text. Run local OCR from My Documents for scanned pages.")
     context = ""
     pages: set[int] = set()
     context_source = "bounded extracted PDF text"

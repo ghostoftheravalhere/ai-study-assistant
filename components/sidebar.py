@@ -38,7 +38,7 @@ def render_sidebar() -> str:
             ):
                 st.session_state.active_page = label
         st.markdown(
-            '<div class="sidebar-note"><span class="status-dot"></span> Phase 7 · Flashcards and review</div>',
+            '<div class="sidebar-note"><span class="status-dot"></span> Phase 8 · Local OCR</div>',
             unsafe_allow_html=True,
         )
     return st.session_state.active_page
