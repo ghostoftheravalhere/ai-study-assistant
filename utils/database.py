@@ -119,6 +119,76 @@ def initialize_database() -> None:
                 """INSERT OR IGNORE INTO document_index_status (document_id, status)
                    SELECT id, 'not_indexed' FROM documents"""
             )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS quizzes (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    source_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+                    source_filename TEXT NOT NULL,
+                    difficulty TEXT NOT NULL CHECK (difficulty IN ('Easy', 'Medium', 'Hard', 'Mixed')),
+                    requested_question_count INTEGER NOT NULL CHECK (requested_question_count BETWEEN 5 AND 30),
+                    timer_duration_seconds INTEGER CHECK (timer_duration_seconds IS NULL OR timer_duration_seconds > 0),
+                    created_at TEXT NOT NULL
+                )"""
+            )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS quiz_questions (
+                    id TEXT PRIMARY KEY,
+                    quiz_id TEXT NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL CHECK (position > 0),
+                    question_text TEXT NOT NULL,
+                    options_json TEXT NOT NULL,
+                    correct_option_id TEXT NOT NULL,
+                    explanation TEXT NOT NULL,
+                    topic TEXT,
+                    source_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+                    source_pages_json TEXT NOT NULL DEFAULT '[]',
+                    UNIQUE(quiz_id, position)
+                )"""
+            )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS quiz_attempts (
+                    id TEXT PRIMARY KEY,
+                    quiz_id TEXT NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+                    original_attempt_id TEXT REFERENCES quiz_attempts(id) ON DELETE SET NULL,
+                    started_at TEXT NOT NULL,
+                    submitted_at TEXT,
+                    status TEXT NOT NULL CHECK (status IN ('in_progress', 'completed', 'timed_out', 'cancelled')),
+                    correct_answers INTEGER,
+                    incorrect_answers INTEGER,
+                    unanswered_questions INTEGER,
+                    total_questions INTEGER NOT NULL CHECK (total_questions >= 0),
+                    total_possible_marks INTEGER NOT NULL CHECK (total_possible_marks >= 0),
+                    percentage REAL,
+                    duration_seconds INTEGER,
+                    timer_duration_seconds INTEGER CHECK (timer_duration_seconds IS NULL OR timer_duration_seconds > 0)
+                )"""
+            )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS quiz_attempt_questions (
+                    attempt_id TEXT NOT NULL REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+                    question_id TEXT NOT NULL REFERENCES quiz_questions(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL CHECK (position > 0),
+                    PRIMARY KEY (attempt_id, question_id),
+                    UNIQUE (attempt_id, position)
+                )"""
+            )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS quiz_answers (
+                    attempt_id TEXT NOT NULL REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+                    question_id TEXT NOT NULL REFERENCES quiz_questions(id) ON DELETE CASCADE,
+                    selected_option_id TEXT,
+                    is_correct INTEGER CHECK (is_correct IS NULL OR is_correct IN (0, 1)),
+                    awarded_marks REAL NOT NULL DEFAULT 0 CHECK (awarded_marks >= 0),
+                    PRIMARY KEY (attempt_id, question_id)
+                )"""
+            )
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_quizzes_source ON quizzes(source_document_id, created_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz ON quiz_questions(quiz_id, position)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_quiz_attempts_history ON quiz_attempts(status, submitted_at DESC)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_quiz_attempts_quiz ON quiz_attempts(quiz_id, started_at DESC)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_quiz_attempt_questions_attempt ON quiz_attempt_questions(attempt_id, position)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_quiz_answers_question ON quiz_answers(question_id, is_correct)")
     except (OSError, sqlite3.Error) as error:
         raise RuntimeError(f"Could not initialize the local database at {DATABASE_PATH}: {error}") from error
 

@@ -6,6 +6,8 @@ AI Study Assistant is a diploma engineering project that will bring document-bas
 
 ## Implemented features
 
+**Phase 6 is complete:** interactive quizzes, saved attempt review, and local study progress analytics are available below.
+
 - Responsive Streamlit dashboard with custom CSS and working sidebar navigation.
 - Four dashboard metrics based only on recorded local activity. New installations show zero counts and no average score until real activity exists.
 - Quick actions and feature cards for the study tools.
@@ -22,6 +24,8 @@ AI Study Assistant is a diploma engineering project that will bring document-bas
 - Document chat retrieves only relevant indexed passages and displays page citations and source snippets.
 - Gemini summaries in short, medium, and detailed formats.
 - Gemini question generation for multiple-choice, short-answer, and descriptive questions, with validated structured responses.
+- Interactive 5–30 question multiple-choice quizzes generated from a selected text-ready PDF, with optional timers, difficulty selection, answer saving, deterministic local scoring, explanations, page citations, full or missed-question retries, and attempt history.
+- Local study analytics for submitted quiz scores, score trends, answered-question accuracy, and topic-level review suggestions that require at least three responses.
 - Successful AI operations appear in recent activity without storing their prompts, document contents, or generated summaries/question sets there.
 
 ## Technology
@@ -56,6 +60,7 @@ ai-study-assistant/
 │   └── summarizer.py
 ├── tests/
 │   ├── test_ai_tools.py
+│   ├── test_quiz.py
 │   └── test_documents.py
 ├── utils/
 │   ├── ai_prompts.py
@@ -132,6 +137,9 @@ The personal key lives only in the active Streamlit session's memory. StudyMate 
 - **My Documents:** choose **Index documents** to process all eligible PDFs or index one PDF from its expander. Indexing re-reads each stored PDF to preserve real page numbers, splits text into overlapping page-specific chunks, and creates local CPU embeddings. The first indexing action downloads the configured model. Use **Rebuild FAISS cache** to recreate the ignored cache from vectors stored in SQLite.
 - **AI Summarizer:** select a text-based PDF, choose Short, Medium, or Detailed, and generate or regenerate a summary. Use the Copy summary expander to copy the result.
 - **Question Generator:** select a PDF, then choose 1–15 questions, difficulty, type, and whether expected answers and explanations should be included. The response is parsed and checked before it is shown. This does not start an interactive quiz.
+- **Practice Quiz:** select a text-ready PDF, optionally enter a title, choose difficulty and question count, and optionally set a 5–120 minute timer. Quiz questions are generated through the same centralized Gemini service and key selection as the other AI tools. During an attempt, saved answers and the original start time are stored locally; correct answers and explanations are hidden until submission. Scoring is performed locally (one point per correct answer, no negative marks), including when the timer ends. Results include duration, every submitted answer, correct answer, explanation, topic, and validated source pages. You can retry the full quiz or only missed and unanswered questions; both create a new saved attempt without changing prior results.
+- **Quiz history:** saved quizzes, question sets, answers, and attempts live in the local SQLite database. History is newest first, can be filtered by quiz or PDF, and lets you resume an unfinished attempt or review a submitted result. If a source PDF is deleted, its filename and saved quiz results remain available.
+- **Study Progress:** see completed and timed-out attempts, average/best/latest submitted quiz scores, score trend when at least two attempts exist, and accuracy across answered questions. Average score is the arithmetic mean of attempt percentages; answer accuracy is correct answers divided by answered responses. Blank responses are excluded from answer accuracy while counting as unanswered quiz points. Topic suggestions are marked provisional until at least three responses are recorded for that topic; topics below 60% accuracy after that threshold are marked for review. Quiz review and analytics do not call Gemini.
 - A missing key produces setup guidance and does not prevent the dashboard, settings, progress page, or local document library from opening.
 
 When an AI request runs, the current prompt and the data needed for that request are sent to Google's Gemini service. General chat sends no document text. Document chat sends only locally retrieved passages within the configured context budget; it does not send the full PDF or extracted document text. Semantic search embeds queries locally and does not call Gemini. Embedding inference and FAISS search run on the local CPU. Treat local chat history, uploaded documents, and the SQLite database as sensitive; they stay on this device unless you use a Gemini study tool.
@@ -195,7 +203,8 @@ pytest
 
 ## Current limitations
 
-- Interactive quizzes and scoring are not implemented yet.
+- Quiz questions depend on Gemini generation quality; invalid or duplicate generated questions are discarded, and at least five valid questions are needed to save a quiz. Source page references are limited to pages present in the supplied PDF passages.
+- Quiz timers are enforced by the local application session and saved start time; they are intended for study practice, not proctored or tamper-proof exams.
 - Scanned PDFs without an embedded text layer cannot be read because OCR is not implemented.
 - Very large PDFs may take time to process; each upload is limited to 20 MB by default.
 - Embeddings use an English sentence model and need a one-time model download; multilingual retrieval quality may be limited. Indexing runs on CPU and can take time for large libraries.
