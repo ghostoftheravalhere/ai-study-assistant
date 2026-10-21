@@ -10,6 +10,7 @@ from pages.ai_chat import render_ai_chat
 from pages.documents import render_documents
 from pages.document_search import render_document_search
 from pages.progress import render_progress
+from pages.flashcards import render_flashcards
 from pages.question_generator import render_question_generator
 from pages.quiz import render_quiz
 from pages.settings import render_settings
@@ -52,6 +53,7 @@ def main() -> None:
         "AI Summarizer": render_summarizer,
         "Question Generator": render_question_generator,
         "Practice Quiz": render_quiz,
+        "Flashcards": render_flashcards,
         "Study Progress": render_progress,
         "Settings": render_settings,
     }

@@ -4,6 +4,23 @@ import streamlit as st
 
 from utils.quiz_logic import MIN_TOPIC_SAMPLE, calculate_progress_analytics
 from utils.quiz_repository import get_progress_records
+from utils.flashcard_repository import get_flashcard_stats
+
+
+def _render_flashcard_progress() -> None:
+    st.divider()
+    st.subheader("Flashcard practice · self-rated recall")
+    try:
+        flashcards = get_flashcard_stats()
+        f1, f2, f3, f4 = st.columns(4)
+        f1.metric("Active flashcards", flashcards["total_cards"])
+        f2.metric("Due today", flashcards["due_today"])
+        f3.metric("Reviews recorded", flashcards["total_reviews"])
+        rate = flashcards["recall_success_rate"]
+        f4.metric("Self-rated successful recalls", f"{rate:.1f}%" if rate is not None else "—")
+        st.caption("A recall success means the student rated a card Hard, Good, or Easy. This is separate from quiz scores and is not an objective measure of mastery.")
+    except Exception as error:
+        st.warning(f"Flashcard statistics could not be loaded: {error}")
 
 
 def render_progress() -> None:
@@ -18,6 +35,7 @@ def render_progress() -> None:
     analytics = calculate_progress_analytics(attempts, answers)
     if not analytics["completed_attempts"]:
         st.markdown('<div class="empty-state"><div class="empty-icon">↗</div><strong>Your progress starts here</strong><p>Submit a quiz to see your scores, answer accuracy, and topic insights. In-progress and cancelled attempts are not included.</p></div>', unsafe_allow_html=True)
+        _render_flashcard_progress()
         return
 
     latest = analytics["trend"][-1]
@@ -59,3 +77,5 @@ def render_progress() -> None:
             f"**{item['title']}** · {result_state} · {item['correct_answers']}/{item['total_questions']} correct · "
             f"{item['percentage']:.1f}% · {item['submitted_at']}"
         )
+
+    _render_flashcard_progress()

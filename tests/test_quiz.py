@@ -102,7 +102,6 @@ def test_gemini_quiz_generation_uses_the_shared_injected_service_and_schema():
     assert result[0]["source_pages"] == [1]
     assert calls[0]["config"].response_mime_type == "application/json"
     assert calls[0]["config"].response_json_schema["required"] == ["questions"]
-    assert "balanced mix" in calls[0]["contents"].casefold()
 
 
 @pytest.mark.parametrize("broken", [

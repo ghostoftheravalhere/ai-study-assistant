@@ -189,6 +189,70 @@ def initialize_database() -> None:
             connection.execute("CREATE INDEX IF NOT EXISTS idx_quiz_attempts_quiz ON quiz_attempts(quiz_id, started_at DESC)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_quiz_attempt_questions_attempt ON quiz_attempt_questions(attempt_id, position)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_quiz_answers_question ON quiz_answers(question_id, is_correct)")
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS flashcard_decks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    category TEXT,
+                    source_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+                    source_filename TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    archived_at TEXT
+                )"""
+            )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS flashcards (
+                    id TEXT PRIMARY KEY,
+                    deck_id TEXT NOT NULL REFERENCES flashcard_decks(id) ON DELETE RESTRICT,
+                    front TEXT NOT NULL,
+                    back TEXT NOT NULL,
+                    explanation TEXT NOT NULL DEFAULT '',
+                    topic TEXT,
+                    difficulty TEXT,
+                    source_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+                    source_filename TEXT,
+                    source_pages_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    archived_at TEXT
+                )"""
+            )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS flashcard_schedule (
+                    card_id TEXT PRIMARY KEY REFERENCES flashcards(id) ON DELETE CASCADE,
+                    review_count INTEGER NOT NULL DEFAULT 0 CHECK (review_count >= 0),
+                    successful_recall_count INTEGER NOT NULL DEFAULT 0 CHECK (successful_recall_count >= 0),
+                    lapse_count INTEGER NOT NULL DEFAULT 0 CHECK (lapse_count >= 0),
+                    interval_days REAL NOT NULL DEFAULT 0 CHECK (interval_days >= 0),
+                    ease_factor REAL NOT NULL DEFAULT 2.5 CHECK (ease_factor >= 1.3),
+                    due_at TEXT NOT NULL,
+                    last_reviewed_at TEXT,
+                    learning_state TEXT NOT NULL DEFAULT 'new' CHECK (learning_state IN ('new', 'learning', 'review'))
+                )"""
+            )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS flashcard_reviews (
+                    id TEXT PRIMARY KEY,
+                    card_id TEXT NOT NULL REFERENCES flashcards(id) ON DELETE RESTRICT,
+                    session_id TEXT NOT NULL,
+                    rating TEXT NOT NULL CHECK (rating IN ('again', 'hard', 'good', 'easy')),
+                    reviewed_at TEXT NOT NULL,
+                    previous_due_at TEXT NOT NULL,
+                    new_due_at TEXT NOT NULL,
+                    previous_interval_days REAL NOT NULL,
+                    new_interval_days REAL NOT NULL,
+                    was_new INTEGER NOT NULL DEFAULT 0 CHECK (was_new IN (0, 1)),
+                    recall_successful INTEGER NOT NULL CHECK (recall_successful IN (0, 1)),
+                    UNIQUE(session_id, card_id)
+                )"""
+            )
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_decks_active ON flashcard_decks(archived_at, title COLLATE NOCASE)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_deck ON flashcards(deck_id, archived_at, created_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_schedule_due ON flashcard_schedule(due_at, learning_state)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_reviews_card ON flashcard_reviews(card_id, reviewed_at DESC)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_reviews_date ON flashcard_reviews(reviewed_at DESC)")
     except (OSError, sqlite3.Error) as error:
         raise RuntimeError(f"Could not initialize the local database at {DATABASE_PATH}: {error}") from error
 
@@ -232,7 +296,7 @@ def get_recent_activity(limit: int = 5) -> list[dict[str, str | float | None]]:
 
 def record_ai_activity(activity_type: str, description: str) -> None:
     """Record a successful AI operation without storing its prompt or result."""
-    allowed_types = {"ai_chat_response", "summary_generated", "questions_generated"}
+    allowed_types = {"ai_chat_response", "summary_generated", "questions_generated", "flashcards_generated"}
     if activity_type not in allowed_types:
         raise ValueError("Unsupported AI activity type.")
     with get_connection() as connection:

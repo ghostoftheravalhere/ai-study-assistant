@@ -26,6 +26,7 @@ from utils.quiz_repository import (
     save_attempt_answer,
     submit_attempt,
 )
+from utils.flashcard_repository import FlashcardRepositoryError, create_card, list_decks
 from utils.quiz_service import generate_document_quiz
 
 
@@ -255,6 +256,40 @@ def _render_review(attempt_id: str) -> None:
             _activate(create_new_attempt(review["quiz_id"], original_attempt_id=attempt_id, question_ids=incorrect_ids, use_quiz_timer=False))
         except QuizRepositoryError as error:
             st.error(str(error))
+    decks = list_decks()
+    if decks:
+        with st.expander("Turn a quiz question into a flashcard"):
+            deck_labels = {item["id"]: item["title"] for item in decks}
+            target_deck = st.selectbox("Destination deck", list(deck_labels), format_func=lambda value: deck_labels[value], key=f"quiz_flashcard_deck_{attempt_id}")
+            question_ids = [item["question_id"] for item in review["questions"]]
+            question_by_id = {item["question_id"]: item for item in review["questions"]}
+            selected_question_id = st.selectbox(
+                "Quiz question", question_ids,
+                format_func=lambda value: f"{question_by_id[value]['position']}. {question_by_id[value]['question_text'][:90]}",
+                key=f"quiz_flashcard_question_{attempt_id}",
+            )
+            proposed = question_by_id[selected_question_id]
+            correct_id = proposed["correct_option_id"]
+            correct_text = next((option["text"] for option in proposed["options"] if option["id"] == correct_id), "")
+            chosen_text = next((option["text"] for option in proposed["options"] if option["id"] == proposed["selected_option_id"]), "Unanswered")
+            st.write("**Proposed front:** " + proposed["question_text"])
+            st.write(f"**Proposed back:** {correct_id}. {correct_text}")
+            st.caption(f"The explanation will preserve your quiz response ({chosen_text}) and the saved explanation.")
+            if st.button("Add this question to the selected deck", key=f"quiz_to_flashcard_{attempt_id}"):
+                try:
+                    create_card(
+                        target_deck,
+                        front=proposed["question_text"],
+                        back=f"{correct_id}. {correct_text}",
+                        explanation=f"Your quiz response: {chosen_text}\n\n{proposed['explanation']}",
+                        topic=proposed["topic"],
+                        source_document_id=proposed["source_document_id"],
+                        source_filename=review["source_filename"],
+                        source_pages=proposed["source_pages"],
+                    )
+                    st.success("Saved as a flashcard. The quiz result remains unchanged.")
+                except FlashcardRepositoryError as error:
+                    st.error(str(error))
     if st.button("Back to quiz setup and history", key=f"quiz_back_{attempt_id}"):
         st.session_state.pop("quiz_review_attempt_id", None)
         st.rerun()

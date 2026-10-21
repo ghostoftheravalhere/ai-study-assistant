@@ -6,7 +6,7 @@ AI Study Assistant is a diploma engineering project that will bring document-bas
 
 ## Implemented features
 
-**Phase 6 is complete:** interactive quizzes, saved attempt review, and local study progress analytics are available below.
+**Phases 6 and 7 are complete:** interactive quizzes, saved attempt review, smart flashcards, spaced repetition, and local study progress analytics are available below.
 
 - Responsive Streamlit dashboard with custom CSS and working sidebar navigation.
 - Four dashboard metrics based only on recorded local activity. New installations show zero counts and no average score until real activity exists.
@@ -26,7 +26,9 @@ AI Study Assistant is a diploma engineering project that will bring document-bas
 - Gemini question generation for multiple-choice, short-answer, and descriptive questions, with validated structured responses.
 - Interactive 5–30 question multiple-choice quizzes generated from a selected text-ready PDF, with optional timers, difficulty selection, answer saving, deterministic local scoring, explanations, page citations, full or missed-question retries, and attempt history.
 - Local study analytics for submitted quiz scores, score trends, answered-question accuracy, and topic-level review suggestions that require at least three responses.
-- Successful AI operations appear in recent activity without storing their prompts, document contents, or generated summaries/question sets there.
+- Manual and Gemini-proposed flashcards organized in persistent decks, with editable review-before-save proposals and PDF source references.
+- Active recall sessions with AGAIN, HARD, GOOD, and EASY ratings, deterministic spaced repetition, daily new-card limits, and append-only local review history.
+- Successful AI operations, including flashcard proposal generation, appear in recent activity without storing prompts, document contents, or generated results there.
 
 ## Technology
 
@@ -51,6 +53,7 @@ ai-study-assistant/
 │   └── sidebar.py
 ├── pages/
 │   ├── ai_chat.py
+│   ├── flashcards.py
 │   ├── documents.py
 │   ├── document_search.py
 │   ├── progress.py
@@ -60,10 +63,14 @@ ai-study-assistant/
 │   └── summarizer.py
 ├── tests/
 │   ├── test_ai_tools.py
+│   ├── test_flashcards.py
 │   ├── test_quiz.py
 │   └── test_documents.py
 ├── utils/
 │   ├── ai_prompts.py
+│   ├── flashcard_repository.py
+│   ├── flashcard_scheduler.py
+│   ├── flashcard_service.py
 │   ├── chunking.py
 │   ├── config.py
 │   ├── database.py
@@ -139,8 +146,11 @@ The personal key lives only in the active Streamlit session's memory. StudyMate 
 - **Question Generator:** select a PDF, then choose 1–15 questions, difficulty, type, and whether expected answers and explanations should be included. The response is parsed and checked before it is shown. This does not start an interactive quiz.
 - **Practice Quiz:** select a text-ready PDF, optionally enter a title, choose difficulty and question count, and optionally set a 5–120 minute timer. Quiz questions are generated through the same centralized Gemini service and key selection as the other AI tools. During an attempt, saved answers and the original start time are stored locally; correct answers and explanations are hidden until submission. Scoring is performed locally (one point per correct answer, no negative marks), including when the timer ends. Results include duration, every submitted answer, correct answer, explanation, topic, and validated source pages. You can retry the full quiz or only missed and unanswered questions; both create a new saved attempt without changing prior results.
 - **Quiz history:** saved quizzes, question sets, answers, and attempts live in the local SQLite database. History is newest first, can be filtered by quiz or PDF, and lets you resume an unfinished attempt or review a submitted result. If a source PDF is deleted, its filename and saved quiz results remain available.
+- **Flashcards:** create decks, add or edit cards manually without an API key, or generate proposals from a text-ready PDF with the existing Gemini service. Select cards to save after reviewing and editing each proposal. Study Due Cards starts a deck-filtered or all-deck session; only the front appears until you choose **Show answer**, then rate recall as Again, Hard, Good, or Easy. Standard sessions include overdue and currently due review cards; optional new cards are limited by the daily allowance (default 10). Decks and cards are archived instead of permanently deleted, preserving review history. If a source PDF is deleted, its filename and page references remain while the unavailable source is identified. A validated quiz question can also be copied into a chosen deck without modifying its quiz result.
+- **Flashcard scheduling:** this SM-2-inspired variant schedules Again after 10 minutes; new Hard, Good, and Easy cards after 1, 2, and 4 days. During relearning after Again, these intervals are 1, 3, and 4 days. For later reviews, Hard uses about 1.2× the previous interval, Good uses the current ease factor, and Easy is at least one day longer than the corresponding Good interval. Hard lowers ease by 0.15, Easy raises it by 0.15; intervals are clamped to 1–3650 days. Again lowers ease by 0.2 and records a lapse. Failed cards do not repeat inside the current session. Day intervals keep the local clock time, and “due today” uses local calendar midnight on the running application host.
 - **Study Progress:** see completed and timed-out attempts, average/best/latest submitted quiz scores, score trend when at least two attempts exist, and accuracy across answered questions. Average score is the arithmetic mean of attempt percentages; answer accuracy is correct answers divided by answered responses. Blank responses are excluded from answer accuracy while counting as unanswered quiz points. Topic suggestions are marked provisional until at least three responses are recorded for that topic; topics below 60% accuracy after that threshold are marked for review. Quiz review and analytics do not call Gemini.
-- A missing key produces setup guidance and does not prevent the dashboard, settings, progress page, or local document library from opening.
+- Flashcard review events and scheduling state are stored in the same local SQLite database. Flashcard success rate counts Hard, Good, and Easy self-ratings divided by all ratings; it is self-reported recall, not an objective score or a guarantee of mastery. Generated flashcards require the configured or personal Gemini key; manual cards, deck management, due queues, review, and saved-card history work without a Gemini key or embedding model.
+- A missing key produces setup guidance and does not prevent the dashboard, settings, progress page, local document library, or manual flashcard workflows from opening.
 
 When an AI request runs, the current prompt and the data needed for that request are sent to Google's Gemini service. General chat sends no document text. Document chat sends only locally retrieved passages within the configured context budget; it does not send the full PDF or extracted document text. Semantic search embeds queries locally and does not call Gemini. Embedding inference and FAISS search run on the local CPU. Treat local chat history, uploaded documents, and the SQLite database as sensitive; they stay on this device unless you use a Gemini study tool.
 
@@ -205,6 +215,7 @@ pytest
 
 - Quiz questions depend on Gemini generation quality; invalid or duplicate generated questions are discarded, and at least five valid questions are needed to save a quiz. Source page references are limited to pages present in the supplied PDF passages.
 - Quiz timers are enforced by the local application session and saved start time; they are intended for study practice, not proctored or tamper-proof exams.
+- Spaced repetition is a transparent SM-2-inspired heuristic. Flashcard ratings are self-reported recall and do not verify mastery or guarantee retention; due-date day boundaries follow the local timezone of the app host.
 - Scanned PDFs without an embedded text layer cannot be read because OCR is not implemented.
 - Very large PDFs may take time to process; each upload is limited to 20 MB by default.
 - Embeddings use an English sentence model and need a one-time model download; multilingual retrieval quality may be limited. Indexing runs on CPU and can take time for large libraries.
@@ -220,6 +231,7 @@ pytest
 3. **Phase 3 — AI study tools:** complete — Gemini chat, summaries, and validated question generation grounded in selected study material.
 4. **Phase 4 — Retrieval:** complete — local embeddings, FAISS semantic search, and passage-grounded document chat.
 5. **Phase 5 — BYOK:** complete — session-only personal Gemini keys, explicit connection testing, and application-key selection.
-6. **Phase 6 — Practice and progress:** interactive quizzes, scoring, and study progress insights.
+6. **Phase 6 — Practice and progress:** complete — interactive quizzes, scoring, answer review, and local study progress insights.
+7. **Phase 7 — Flashcards:** complete — persistent decks and cards, PDF-generated proposals, active recall, local spaced repetition, and review analytics.
 
 All phases will continue in this repository.
