@@ -142,13 +142,23 @@ def render_ai_chat() -> None:
         del st.session_state[selector_key]
     pending_selection_key = f"chat_next_selection_{context_key}"
     if pending_selection_key in st.session_state:
-        st.session_state[selector_key] = st.session_state.pop(pending_selection_key)
+        pending_selection = st.session_state.pop(pending_selection_key)
+        st.session_state[selector_key] = pending_selection if pending_selection in valid_ids else None
+    new_chat_confirmation_key = f"chat_new_confirmation_{context_key}"
 
     conversation_col, action_col = st.columns([5, 1])
     with action_col:
         if st.button("＋ New chat", key=f"new_chat_{context_key}", use_container_width=True):
-            st.session_state[selector_key] = None
-            st.rerun()
+            try:
+                conversation_id = create_conversation(source_document_id, chat_mode=chat_mode)
+                st.session_state[pending_selection_key] = conversation_id
+                st.session_state[new_chat_confirmation_key] = conversation_id
+                st.rerun()
+            except (OSError, sqlite3.Error):
+                st.error(
+                    "A new conversation could not be created in the local database. "
+                    "Check that the database folder is writable, then try again."
+                )
     with conversation_col:
         selected_conversation_id = st.selectbox(
             "Conversation",
@@ -171,6 +181,8 @@ def render_ai_chat() -> None:
             '<p>Ask a question to start a conversation. Successful chats are saved on this device.</p></div>',
             unsafe_allow_html=True,
         )
+        if st.session_state.get(new_chat_confirmation_key) == selected_conversation_id and selected_conversation_id:
+            st.success("New chat started. Send a message to begin your conversation.")
     for index, message in enumerate(messages):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])

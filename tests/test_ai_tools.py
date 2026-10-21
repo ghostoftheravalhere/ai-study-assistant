@@ -440,6 +440,161 @@ def test_chat_messages_persist_and_duplicate_request_is_ignored(ai_database: Pat
     assert database.get_recent_activity()[0]["description"] == "Answered an AI study question"
 
 
+def _add_chat_scope_document(document_id: str = "doc-1") -> dict[str, Any]:
+    with database.get_connection() as connection:
+        connection.execute(
+            "INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (document_id, "biology.pdf", f"{document_id}.pdf", 100, 1, "2026-10-21", "ready", "Cell biology", f"hash-{document_id}"),
+        )
+    return {
+        "id": document_id,
+        "original_filename": "biology.pdf",
+        "extraction_status": "ready",
+        "text_ready": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("mode_label", "chat_mode", "source_document_id"),
+    [
+        ("General study chat", "general", None),
+        ("Ask about one document", "document", "doc-single"),
+        ("Ask across indexed documents", "all_documents", None),
+    ],
+)
+def test_new_chat_creates_one_empty_conversation_in_current_scope(
+    ai_database: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode_label: str,
+    chat_mode: str,
+    source_document_id: str | None,
+) -> None:
+    from study_pages import ai_chat
+
+    indexed_document = _add_chat_scope_document("doc-indexed")
+    if source_document_id:
+        selected_document = _add_chat_scope_document(source_document_id)
+        monkeypatch.setattr(ai_chat, "render_document_picker", lambda *_args, **_kwargs: selected_document)
+    statuses = [{"id": indexed_document["id"], "status": "indexed"}]
+    if source_document_id:
+        statuses.append({"id": source_document_id, "status": "indexed"})
+    monkeypatch.setattr(ai_chat, "get_document_index_statuses", lambda: statuses)
+    monkeypatch.setattr(
+        ai_chat,
+        "get_gemini_service_for_session",
+        lambda: pytest.fail("Starting an empty chat must not call Gemini."),
+    )
+
+    previous_id = database.create_conversation(source_document_id, chat_mode=chat_mode)
+    database.save_chat_exchange(previous_id, "Old question", "Old answer", f"old-{chat_mode}")
+    app_path = Path(__file__).resolve().parents[1] / "app.py"
+    app = AppTest.from_file(str(app_path)).run()
+    app.button(key="nav_AI Chat").click().run()
+    app.radio(key="ai_chat_mode").set_value(mode_label).run()
+
+    context_key = source_document_id or chat_mode
+    selector_key = f"chat_conversation_{context_key}"
+    app.button(key=f"new_chat_{context_key}").click().run()
+
+    conversations = database.list_conversations(source_document_id, chat_mode=chat_mode)
+    assert len(conversations) == 2
+    selected_id = app.session_state[selector_key]
+    assert selected_id != previous_id
+    assert selected_id in {item["id"] for item in conversations}
+    selected_conversation = next(item for item in conversations if item["id"] == selected_id)
+    assert selected_conversation["source_document_id"] == source_document_id
+    assert selected_conversation["chat_mode"] == chat_mode
+    assert "Old question" in app.selectbox(key=selector_key).options
+    assert database.get_chat_messages(selected_id) == []
+    assert [(item["role"], item["content"]) for item in database.get_chat_messages(previous_id)] == [
+        ("user", "Old question"),
+        ("assistant", "Old answer"),
+    ]
+    assert not any("Old question" in item.value or "Old answer" in item.value for item in app.markdown)
+    assert app.session_state["ai_chat_mode"] == mode_label
+    assert any("New chat started. Send a message" in item.value for item in app.success)
+
+
+def test_new_chat_on_an_empty_conversation_creates_another_single_record(
+    ai_database: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from study_pages import ai_chat
+
+    monkeypatch.setattr(
+        ai_chat,
+        "get_gemini_service_for_session",
+        lambda: pytest.fail("Starting an empty chat must not call Gemini."),
+    )
+    app_path = Path(__file__).resolve().parents[1] / "app.py"
+    app = AppTest.from_file(str(app_path)).run()
+    app.button(key="nav_AI Chat").click().run()
+    assert database.list_conversations() == []
+
+    app.button(key="new_chat_general").click().run()
+    first_id = app.session_state["chat_conversation_general"]
+    assert len(database.list_conversations()) == 1
+    assert database.get_chat_messages(first_id) == []
+
+    app.button(key="new_chat_general").click().run()
+    second_id = app.session_state["chat_conversation_general"]
+    assert second_id != first_id
+    assert len(database.list_conversations()) == 2
+    assert database.get_chat_messages(first_id) == []
+    assert database.get_chat_messages(second_id) == []
+    assert any("New chat started. Send a message" in item.value for item in app.success)
+
+
+def test_new_chat_database_failure_does_not_claim_success(
+    ai_database: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from study_pages import ai_chat
+
+    def fail_creation(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is read only")
+
+    monkeypatch.setattr(ai_chat, "create_conversation", fail_creation)
+    app_path = Path(__file__).resolve().parents[1] / "app.py"
+    app = AppTest.from_file(str(app_path)).run()
+    app.button(key="nav_AI Chat").click().run()
+    app.button(key="new_chat_general").click().run()
+
+    assert database.list_conversations() == []
+    assert any("database folder is writable" in item.value for item in app.error)
+    assert not any("New chat started" in item.value for item in app.success)
+
+
+def test_message_in_new_chat_still_saves_and_updates_conversation(
+    ai_database: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from study_pages import ai_chat
+
+    calls: list[tuple[list[dict[str, str]], str]] = []
+
+    class FakeChatService:
+        def answer_chat(self, history, prompt, *, retrieved_context=None):
+            calls.append((history, prompt))
+            return SimpleNamespace(text="A locally mocked answer.")
+
+    monkeypatch.setattr(ai_chat, "is_gemini_available_for_session", lambda: True)
+    monkeypatch.setattr(ai_chat, "get_gemini_service_for_session", lambda: FakeChatService())
+    app_path = Path(__file__).resolve().parents[1] / "app.py"
+    app = AppTest.from_file(str(app_path)).run()
+    app.button(key="nav_AI Chat").click().run()
+    app.button(key="new_chat_general").click().run()
+    conversation_id = app.session_state["chat_conversation_general"]
+
+    app.chat_input[0].set_value("Explain cell theory").run()
+
+    assert calls == [([], "Explain cell theory")]
+    assert app.session_state["chat_conversation_general"] == conversation_id
+    assert len(database.list_conversations()) == 1
+    assert database.list_conversations()[0]["title"] == "Explain cell theory"
+    assert [item["content"] for item in database.get_chat_messages(conversation_id)] == [
+        "Explain cell theory",
+        "A locally mocked answer.",
+    ]
+
+
 def test_document_chat_conversations_are_separated_by_source(ai_database: Path) -> None:
     first = database.create_conversation("doc-1")
     second = database.create_conversation("doc-2")
