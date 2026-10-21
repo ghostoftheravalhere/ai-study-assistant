@@ -9,11 +9,13 @@ from typing import Iterator, Mapping, Sequence
 
 from utils.config import DATABASE_PATH
 
+DATABASE_SCHEMA_VERSION = 10
+
 
 @contextmanager
-def get_connection() -> Iterator[sqlite3.Connection]:
+def get_connection(database_path=None) -> Iterator[sqlite3.Connection]:
     """Open a SQLite connection and always close it after use."""
-    connection = sqlite3.connect(DATABASE_PATH)
+    connection = sqlite3.connect(database_path or DATABASE_PATH)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     try:
@@ -23,11 +25,15 @@ def get_connection() -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
-def initialize_database() -> None:
+def initialize_database(database_path=None) -> None:
     """Create new tables without changing or clearing existing user data."""
     try:
-        DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with get_connection() as connection:
+        database_path = database_path or DATABASE_PATH
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+        with get_connection(database_path) as connection:
+            current_version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if current_version > DATABASE_SCHEMA_VERSION:
+                raise sqlite3.DatabaseError("The database was created by a newer StudyMate version.")
             connection.execute(
                 """CREATE TABLE IF NOT EXISTS study_activity (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -314,6 +320,7 @@ def initialize_database() -> None:
             connection.execute("CREATE INDEX IF NOT EXISTS idx_planner_tasks_exam ON planner_tasks(exam_id,planned_date)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_planner_topics_subject ON planner_topics(subject_id,archived_at)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_planner_sessions_completed ON planner_sessions(completed_at DESC)")
+            connection.execute(f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION}")
     except (OSError, sqlite3.Error) as error:
         raise RuntimeError(f"Could not initialize the local database at {DATABASE_PATH}: {error}") from error
 

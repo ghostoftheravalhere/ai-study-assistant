@@ -2,11 +2,11 @@
 
 **Your Personal AI-Powered Learning Companion**
 
-AI Study Assistant is a diploma engineering project that will bring document-based question answering, AI chat, summaries, question generation, quizzes, and study progress into one learning workspace.
+AI Study Assistant is a diploma engineering project that brings document-based question answering, AI chat, summaries, question generation, quizzes, and study progress into one learning workspace.
 
 ## Implemented features
 
-**Phases 6–9 are complete:** quizzes, flashcards, spaced repetition, progress analytics, local OCR, and the local-first study planner are available below.
+**Phases 6–10 are complete:** quizzes, flashcards, spaced repetition, progress analytics, local OCR, the local-first study planner, and local data management are available below.
 
 - Responsive Streamlit dashboard with custom CSS and working sidebar navigation.
 - Four dashboard metrics based only on recorded local activity. New installations show zero counts and no average score until real activity exists.
@@ -31,6 +31,7 @@ AI Study Assistant is a diploma engineering project that will bring document-bas
 - Successful AI operations, including flashcard proposal generation, appear in recent activity without storing prompts, document contents, or generated results there.
 - Local Tesseract OCR for selected scanned PDF pages, with page-aware text, retryable status, and native-text preservation.
 - Local study planner with subjects, topics, exams, daily availability, deterministic exam revision proposals, editable tasks, missed-task recovery, and actual study-session history.
+- Validated database-only and complete database-plus-PDF backups, confirmation-gated restore with retained safety backups, selected CSV/JSON exports, and downloadable local HTML study reports.
 
 ## Technology
 
@@ -58,6 +59,7 @@ ai-study-assistant/
 │   ├── ai_chat.py
 │   ├── flashcards.py
 │   ├── documents.py
+│   ├── data_management.py
 │   ├── document_search.py
 │   ├── progress.py
 │   ├── planner.py
@@ -70,7 +72,8 @@ ai-study-assistant/
 │   ├── test_flashcards.py
 │   ├── test_ocr.py
 │   ├── test_quiz.py
-│   └── test_documents.py
+│   ├── test_documents.py
+│   └── test_data_management.py
 ├── utils/
 │   ├── ai_prompts.py
 │   ├── flashcard_repository.py
@@ -88,7 +91,10 @@ ai-study-assistant/
 │   ├── retrieval_service.py
 │   ├── vector_store.py
 │   ├── pdf_processing.py
-│   └── planner_service.py
+│   ├── planner_service.py
+│   ├── backup_service.py
+│   ├── data_export_service.py
+│   └── study_report_service.py
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
@@ -175,6 +181,19 @@ The daily view shows actual due/overdue flashcard counts as a recommendation, re
 
 Record a session from a task with actual minutes and an optional note, or add a standalone session with optional subject, topic, and exam links. Study history lists saved sessions. Progress distinguishes estimated planned minutes from actual recorded session minutes, and counts task completion only for completed tasks (not canceled tasks). Session records, subjects, topics, exams, tasks, and planner settings are stored in additive `planner_*` tables in the same local `study_assistant.db` described below. Planner tables do not contain PDF text or API keys. All planner workflows work without Gemini.
 - A missing key produces setup guidance and does not prevent the dashboard, settings, progress page, local document library, or manual flashcard workflows from opening.
+
+## Backups, exports, and study reports
+
+Open **Data Management** from the sidebar. Backups and exports are created only when you click their action; ordinary page reruns do not start backup work. These files can contain private study data. Downloaded backups and exports are **not encrypted**; store them securely.
+
+- **Database-only backup (`.sqlite3`):** a point-in-time SQLite online snapshot. It includes SQLite tables, indexes, constraints, extracted PDF text, OCR metadata, quizzes and answers, flashcards and review history, planner data, study activity, and saved semantic vectors. It does not include externally stored PDF files.
+- **Complete backup (`.zip`):** a version 1 manifest, a validated SQLite snapshot, and every PDF referenced by the document library. The manifest records relative archive paths, sizes, and SHA-256 checksums. FAISS caches are rebuildable and excluded, as are environment variables, app/API secrets, session-only personal Gemini keys, logs, OCR render temporaries, virtual environments, and unrelated files. Complete archives are limited to 512 MiB and are not encrypted.
+- **Restore:** select a `.sqlite3`, `.sqlite`, `.db`, or complete `.zip` file and validate it before confirming replacement. Validation checks SQLite integrity, core tables, foreign keys, format/schema versions, archive paths, and checksums. A persistent safety SQLite snapshot is saved under the configured app-data directory's `backups` folder before replacement. Older additive schemas are migrated in a staging database; a future schema is rejected. The live database is checkpointed and atomically replaced, then checked again. Existing PDFs are never overwritten: identical files are reused, while conflicts receive a new generated filename. A database-only restore leaves external PDF files alone, so some restored document records may refer to unavailable files. Connections are opened and closed per operation, so no restart is required. The app must not be actively writing to the database from another process during restore.
+- **Exports:** choose one or more categories for versioned UTF-8 JSON, or one category for UTF-8-with-BOM CSV. Categories are quiz results with answer details, flashcards, flashcard review history, planner records, study activity summaries, and document/OCR/index metadata. Chat transcripts, API keys, environment variables, secrets, and PDF contents are excluded. CSV cells that could execute as spreadsheet formulas are prefixed safely. Flashcard exports preserve deck/card relationships, source filename and page metadata, scheduling state, and archived cards when you opt in; recall labels remain explicitly self-reported. There is no flashcard importer in Phase 10.
+- **Study report:** download a standalone HTML report for 7, 30, 90, or 365 days, or all time. It uses saved quiz attempts, flashcard reviews, exams, planner tasks, subjects/topics, and actual study sessions. Quiz scores remain separate from self-rated flashcard recall, and estimated planned minutes remain separate from recorded session minutes. Empty periods are reported without fabricated values.
+- **Temporary files:** validation and restore staging use an operating-system temporary directory and are cleaned after each operation. The pre-restore safety snapshot is intentionally retained for recovery. FAISS indexes can be rebuilt from the database after restoring on another machine.
+
+The ZIP manifest format is currently version 1 and the database schema is version 10. Backups from a newer schema are rejected; retain the original app version for recovery if you need to open a backup created by a future release.
 
 When an AI request runs, the current prompt and the data needed for that request are sent to Google's Gemini service. General chat sends no document text. Document chat sends only locally retrieved passages within the configured context budget; it does not send the full PDF or extracted document text. Semantic search embeds queries locally and does not call Gemini. Embedding inference and FAISS search run on the local CPU. Treat local chat history, uploaded documents, and the SQLite database as sensitive; they stay on this device unless you use a Gemini study tool.
 
@@ -282,5 +301,7 @@ pytest
 6. **Phase 6 — Practice and progress:** complete — interactive quizzes, scoring, answer review, and local study progress insights.
 7. **Phase 7 — Flashcards:** complete — persistent decks and cards, PDF-generated proposals, active recall, local spaced repetition, and review analytics.
 8. **Phase 8 — Local OCR:** complete — page-aware Tesseract OCR for scanned and mixed PDFs, safe retries, semantic reindexing, and connected study tools.
+9. **Phase 9 — Study planner:** complete — local subjects, exams, revision planning, tasks, and session history.
+10. **Phase 10 — Data management:** complete — validated backups and restore, selected data exports, and downloadable study reports.
 
 All phases will continue in this repository.
