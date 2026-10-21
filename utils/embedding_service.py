@@ -7,6 +7,13 @@ import streamlit as st
 
 from utils.config import EMBEDDING_MODEL_NAME
 
+_LOADED_MODEL_NAMES: set[str] = set()
+
+
+def is_embedding_model_loaded(model_name: str = EMBEDDING_MODEL_NAME) -> bool:
+    """Return this process's successful model-load state without initializing it."""
+    return model_name in _LOADED_MODEL_NAMES
+
 
 class EmbeddingModelError(RuntimeError):
     """Raised when the local embedding model cannot be loaded or used."""
@@ -22,7 +29,9 @@ def _load_sentence_transformer(model_name: str) -> Any:
             "Local search dependencies are missing. Install the project requirements and restart StudyMate."
         ) from error
     try:
-        return SentenceTransformer(model_name, device="cpu")
+        model = SentenceTransformer(model_name, device="cpu")
+        _LOADED_MODEL_NAMES.add(model_name)
+        return model
     except (OSError, ValueError, RuntimeError) as error:
         raise EmbeddingModelError(
             "The local embedding model could not be loaded or downloaded. Check your connection and model setting, then try again."

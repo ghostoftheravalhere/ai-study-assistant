@@ -106,6 +106,20 @@ def test_upload_persists_metadata_text_and_safe_storage_name(document_environmen
     assert (storage_path / saved["stored_filename"]).is_file()
 
 
+def test_stored_document_symlink_outside_storage_is_rejected(document_environment: tuple[Path, Path], tmp_path: Path) -> None:
+    _, storage_path = document_environment
+    outside = tmp_path / "outside.pdf"
+    outside.write_bytes(make_pdf("private outside file"))
+    storage_path.mkdir(parents=True, exist_ok=True)
+    link = storage_path / "linked.pdf"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlink creation is unavailable on this Windows setup.")
+    with pytest.raises(DocumentError, match="symbolic link"):
+        documents.resolve_stored_document_path("linked.pdf")
+
+
 def test_invalid_extension_and_pdf_content_are_rejected() -> None:
     with pytest.raises(DocumentError, match="Only PDF"):
         documents.save_uploaded_pdf("notes.txt", b"text")

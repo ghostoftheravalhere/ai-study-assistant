@@ -12,8 +12,14 @@ from utils.planner_service import (
 )
 from utils.quiz_logic import calculate_progress_analytics
 from utils.quiz_repository import get_progress_records
+from utils.safe_logging import safe_error_message
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def _show_planner_failure(error: Exception, action: str) -> None:
+    message = str(error) if isinstance(error, PlannerError) else safe_error_message(error, operation="planner", action=action)
+    st.error(message)
 
 
 def render_planner() -> None:
@@ -48,14 +54,14 @@ def render_planner() -> None:
             card_stats=get_flashcard_stats()
             if due["total"]: st.info(f"Flashcards: {due['total']} card(s) due or overdue · {card_stats['reviewed_today']} review(s) recorded today. This recommendation uses the saved review schedule and does not change intervals.")
             else: st.caption(f"No flashcards due · {card_stats['reviewed_today']} review(s) recorded today.")
-        except Exception as error: st.warning(f"Flashcard due status could not be read: {error}")
+        except Exception as error: st.warning(safe_error_message(error, operation="planner_flashcard_summary", action="Flashcard due status"))
         try:
             attempts,answers=get_progress_records(); insights=calculate_progress_analytics(attempts,answers)["topics"]
             review=[item for item in insights if item["insight"]=="Needs review"]
             if review:
                 st.subheader("Quiz topics to revisit")
                 for item in review: st.write(f"{item['topic']} · {item['correct']}/{item['answered']} correct ({item['accuracy_percentage']:.1f}%) · based on saved quiz responses")
-        except Exception as error: st.warning(f"Quiz revision suggestions could not be loaded: {error}")
+        except Exception as error: st.warning(safe_error_message(error, operation="planner_quiz_suggestions", action="Quiz revision suggestions"))
         with st.expander("Add a task"):
             _task_form()
         with st.expander("Record a study session"):
@@ -68,7 +74,7 @@ def render_planner() -> None:
                 note=st.text_input("Note (optional)",key="manual_session_note")
                 if st.form_submit_button("Save study session"):
                     try: record_session(int(minutes),subject_id=subject["id"] if subject else None,topic_id=topic["id"] if topic else None,exam_id=exam["id"] if exam else None,note=note); st.success("Session recorded."); st.rerun()
-                    except (PlannerError,Exception) as error: st.error(f"Session could not be saved: {error}")
+                    except Exception as error: _show_planner_failure(error, "Saving the study session")
         if overdue:
             st.subheader("Reschedule missed work")
             chosen=st.multiselect("Select overdue or missed tasks",[t["id"] for t in overdue],format_func=lambda i: next((t["title"] for t in overdue if t["id"]==i),i),key="reschedule_ids")
@@ -130,7 +136,7 @@ def _task_card(task: dict) -> None:
                 try:
                     record_task_session(task["id"],int(duration),note=note)
                     st.success("Study session recorded."); st.rerun()
-                except (PlannerError,Exception) as error: st.error(f"Could not record the session: {error}")
+                except Exception as error: _show_planner_failure(error, "Recording the study session")
             if cancel.button("Cancel task",key=f"cancel_{task['id']}"):
                 try: set_task_status(task["id"],"cancelled"); st.rerun()
                 except PlannerError as error: st.error(str(error))
@@ -163,7 +169,7 @@ def _task_form() -> None:
         description=st.text_area("Notes"); priority=st.slider("Priority",1,5,3)
         if st.form_submit_button("Create task"):
             try: create_task(title,planned,int(minutes),description=description,task_type=task_type,subject_id=subject["id"] if subject else None,topic_id=topic["id"] if topic else None,exam_id=exam["id"] if exam else None,document_id=document["id"] if document else None,quiz_id=quiz["id"] if quiz else None,priority=priority); st.success("Task created."); st.rerun()
-            except (PlannerError,Exception) as error: st.error(f"Task could not be created: {error}")
+            except Exception as error: _show_planner_failure(error, "Creating the task")
 
 
 def _render_exams(today: date) -> None:
@@ -182,7 +188,7 @@ def _render_exams(today: date) -> None:
                 if subject is None: raise PlannerError("Create or choose a subject first.")
                 save_exam(name,exam_day,subject_id=subject["id"],start_time=start_time.strftime("%H:%M") if start_time else None,location=location,notes=notes)
                 st.success("Exam added."); st.rerun()
-            except (PlannerError,Exception) as error: st.error(f"Exam could not be saved: {error}")
+            except Exception as error: _show_planner_failure(error, "Saving the exam")
     exam_rows=list_exams(subject_id=filter_subject["id"] if filter_subject else None,start_date=filter_start,end_date=filter_end)
     if not exam_rows: st.info("No exams yet. Add an exam to plan revision.")
     for exam in exam_rows:
@@ -199,7 +205,7 @@ def _render_exams(today: date) -> None:
                 et=st.text_input("Time HH:MM",exam["start_time"] or ""); el=st.text_input("Location",exam["location"]); enotes=st.text_area("Notes",exam["notes"])
                 if st.form_submit_button("Save exam changes"):
                     try: save_exam(en,ed,exam_id=exam["id"],subject_id=es["id"] if es else None,subject_name=exam["subject_name"],start_time=et or None,location=el,notes=enotes); st.success("Exam updated."); st.rerun()
-                    except (PlannerError,Exception) as error: st.error(f"Exam could not be updated: {error}")
+                    except Exception as error: _show_planner_failure(error, "Updating the exam")
             ca,cb=st.columns(2)
             if ca.button("Mark completed",key=f"exam_done_{exam['id']}"): set_exam_status(exam["id"],"completed"); st.rerun()
             confirmed=st.checkbox("Confirm archive; keep related study history",key=f"confirm_exam_archive_{exam['id']}")
@@ -224,7 +230,7 @@ def _render_subjects() -> None:
         name=st.text_input("New subject"); description=st.text_area("Description")
         if st.form_submit_button("Add subject"):
             try: save_subject(name,description=description); st.success("Subject saved."); st.rerun()
-            except (PlannerError,Exception) as error: st.error(f"Subject could not be saved: {error}")
+            except Exception as error: _show_planner_failure(error, "Saving the subject")
     subjects=list_subjects(); exams=list_exams()
     if not subjects: st.info("Add a subject to start organizing topics.")
     for subject in subjects:
@@ -233,7 +239,7 @@ def _render_subjects() -> None:
                 edited=st.text_input("Name",subject["name"]); desc=st.text_area("Description",subject["description"])
                 if st.form_submit_button("Save subject"):
                     try: save_subject(edited,subject_id=subject["id"],description=desc); st.success("Subject updated."); st.rerun()
-                    except (PlannerError,Exception) as error: st.error(str(error))
+                    except Exception as error: _show_planner_failure(error, "Updating the subject")
             if st.button("Archive subject",key=f"archive_subject_{subject['id']}"):
                 try: archive_subject(subject["id"]); st.success("Archived; topic and study history are retained."); st.rerun()
                 except PlannerError as error: st.error(str(error))
@@ -243,7 +249,7 @@ def _render_subjects() -> None:
                 priority=st.slider("Priority",1,5,3,key=f"topic_priority_{subject['id']}")
                 if st.form_submit_button("Add topic"):
                     try: save_topic(subject["id"],topic_name,estimated_minutes=int(effort),exam_id=exam["id"] if exam else None,priority=priority); st.success("Topic added."); st.rerun()
-                    except (PlannerError,Exception) as error: st.error(f"Topic could not be saved: {error}")
+                    except Exception as error: _show_planner_failure(error, "Saving the topic")
             for topic in list_topics(subject_id=subject["id"]):
                 state="complete" if topic["completed_at"] else f"{topic['estimated_minutes']} min · priority {topic['priority']}"
                 st.write(f"• {topic['name']} — {state}" + (f" · source {topic['source_filename']}" if topic["source_filename"] else ""))
@@ -257,7 +263,7 @@ def _render_subjects() -> None:
                         doc=st.selectbox("Source PDF",[None]+docs,index=next((i+1 for i,d in enumerate(docs) if d["id"]==topic["source_document_id"]),0),format_func=lambda d:"No PDF" if d is None else d["title"],key=f"edit_topic_doc_{topic['id']}")
                         if st.form_submit_button("Save topic changes"):
                             try: save_topic(subject["id"],topic_name,topic_id=topic["id"],estimated_minutes=int(effort),exam_id=exam["id"] if exam else None,priority=priority,source_document_id=doc["id"] if doc else None); st.success("Topic updated."); st.rerun()
-                            except (PlannerError,Exception) as error: st.error(f"Topic could not be updated: {error}")
+                            except Exception as error: _show_planner_failure(error, "Updating the topic")
                     if st.button("Archive topic",key=f"archive_topic_{topic['id']}"):
                         try: archive_topic(topic["id"]); st.success("Topic archived; related tasks are retained."); st.rerun()
                         except PlannerError as error: st.error(str(error))

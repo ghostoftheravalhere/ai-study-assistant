@@ -14,6 +14,7 @@ NAVIGATION = [
     ("Flashcards", "▧"),
     ("Study Planner", "▦"),
     ("Data Management", "⇩"),
+    ("System Health", "◉"),
     ("Study Progress", "↗"),
     ("Settings", "⚙"),
 ]
@@ -40,7 +41,7 @@ def render_sidebar() -> str:
             ):
                 st.session_state.active_page = label
         st.markdown(
-            '<div class="sidebar-note"><span class="status-dot"></span> Phase 10 · Data Protection</div>',
+            '<div class="sidebar-note"><span class="status-dot"></span> Phase 11 · Reliability</div>',
             unsafe_allow_html=True,
         )
     return st.session_state.active_page

@@ -1,9 +1,13 @@
 """Dashboard layout and data-backed summary cards."""
 
+import html
+
 import streamlit as st
 
 from utils.database import get_dashboard_stats, get_recent_activity
+from utils.database import get_connection
 from utils.indexing_service import get_document_index_statuses
+from utils.gemini_service import is_gemini_configured
 
 
 FEATURES = [
@@ -20,6 +24,18 @@ def _navigate(page: str) -> None:
     st.rerun()
 
 
+def _has_saved_workspace_data() -> bool:
+    with get_connection() as connection:
+        for table in (
+            "documents", "chat_conversations", "quizzes", "quiz_attempts",
+            "flashcard_decks", "flashcards", "planner_subjects", "planner_exams",
+            "planner_tasks", "planner_sessions", "study_activity",
+        ):
+            if connection.execute(f"SELECT EXISTS(SELECT 1 FROM {table} LIMIT 1)").fetchone()[0]:
+                return True
+    return False
+
+
 def render_dashboard() -> None:
     """Render the welcome view, statistics, and feature shortcuts."""
     st.markdown('<div class="eyebrow">YOUR LEARNING SPACE</div>', unsafe_allow_html=True)
@@ -30,6 +46,31 @@ def render_dashboard() -> None:
     )
 
     stats = get_dashboard_stats()
+    if not st.session_state.get("hide_getting_started") and not _has_saved_workspace_data():
+        with st.container(border=True):
+            st.markdown("### Getting started")
+            st.write("Your workspace is ready. Add a PDF to study locally; configure Gemini only when you want AI-generated study material.")
+            first = st.columns(3)
+            for column, label, page in (
+                (first[0], "1 · Upload a PDF", "My Documents"),
+                (first[1], "2 · Create flashcards", "Flashcards"),
+                (first[2], "3 · Create a quiz", "Practice Quiz"),
+            ):
+                if column.button(label, key=f"onboarding_{page}", use_container_width=True):
+                    _navigate(page)
+            second = st.columns(3)
+            for column, label, page in (
+                (second[0], "4 · Make a study plan", "Study Planner"),
+                (second[1], "Set up Gemini", "Settings"),
+                (second[2], "Check optional setup", "System Health"),
+            ):
+                if column.button(label, key=f"onboarding_{page}", use_container_width=True):
+                    _navigate(page)
+            if not is_gemini_configured():
+                st.caption("No Gemini key is configured. Dashboard, PDF storage, manual flashcards, quiz scoring, planner, backup, and exports remain local. Scanned-page OCR needs optional Tesseract; first-time semantic indexing may download its embedding model.")
+            if st.button("Dismiss getting started", key="dismiss_getting_started"):
+                st.session_state["hide_getting_started"] = True
+                st.rerun()
     cards = [
         ("Documents Uploaded", stats["documents"], "▤", "stat-blue"),
         ("Questions Practiced", stats["questions"], "?", "stat-violet"),
@@ -84,8 +125,10 @@ def render_dashboard() -> None:
     else:
         for item in activity:
             score = f" · {item['score']}%" if item["score"] is not None else ""
+            description = html.escape(str(item["description"]), quote=True)
+            created_at = html.escape(str(item["created_at"]), quote=True)
             st.markdown(
-                f"<div class='activity-row'><span class='activity-dot'></span><span>{item['description']}{score}</span>"
-                f"<span class='activity-time'>{item['created_at']}</span></div>",
+                f"<div class='activity-row'><span class='activity-dot'></span><span>{description}{score}</span>"
+                f"<span class='activity-time'>{created_at}</span></div>",
                 unsafe_allow_html=True,
             )

@@ -38,6 +38,7 @@ from utils.gemini_service import (
     is_gemini_available_for_session,
     load_gemini_model,
 )
+from utils.safe_logging import safe_error_message
 
 
 def _safe_load(function, *args, **kwargs):
@@ -509,7 +510,7 @@ def _render_flashcards_content() -> None:
     try:
         _render_summary()
     except Exception as error:
-        st.error(f"Flashcard data could not be loaded from the local database: {error}")
+        st.error(safe_error_message(error, operation="flashcard_data_load", action="Flashcard data loading"))
         return
     if st.session_state.get("flashcard_session_id"):
         _render_session()
@@ -529,4 +530,4 @@ def render_flashcards() -> None:
     try:
         _render_flashcards_content()
     except (sqlite3.Error, OSError) as error:
-        st.error(f"Flashcard data could not be saved or loaded: {error}")
+        st.error(safe_error_message(error, operation="flashcard_page", action="Flashcard operation"))

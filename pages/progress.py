@@ -6,6 +6,7 @@ from utils.quiz_logic import MIN_TOPIC_SAMPLE, calculate_progress_analytics
 from utils.quiz_repository import get_progress_records
 from utils.flashcard_repository import get_flashcard_stats
 from utils.planner_service import get_planner_metrics
+from utils.safe_logging import safe_error_message
 
 
 def _render_flashcard_progress() -> None:
@@ -21,7 +22,7 @@ def _render_flashcard_progress() -> None:
         f4.metric("Self-rated successful recalls", f"{rate:.1f}%" if rate is not None else "—")
         st.caption("A recall success means the student rated a card Hard, Good, or Easy. This is separate from quiz scores and is not an objective measure of mastery.")
     except Exception as error:
-        st.warning(f"Flashcard statistics could not be loaded: {error}")
+        st.warning(safe_error_message(error, operation="progress_flashcard_metrics", action="Flashcard statistics"))
 
 
 def _render_planner_progress() -> None:
@@ -36,7 +37,7 @@ def _render_planner_progress() -> None:
         columns[3].metric("Overdue tasks", data["overdue_tasks"])
         st.caption(f"Today's scheduled-task completion rate: {data['completion_rate']:.1f}%. Planned minutes are estimates; completed minutes come only from recorded study sessions. Canceled tasks are excluded.")
     except Exception as error:
-        st.warning(f"Study planner metrics could not be loaded: {error}")
+        st.warning(safe_error_message(error, operation="progress_planner_metrics", action="Study planner metrics"))
 
 
 def render_progress() -> None:
@@ -46,7 +47,7 @@ def render_progress() -> None:
     try:
         attempts, answers = get_progress_records()
     except Exception as error:
-        st.error(f"Study progress could not be loaded from the local database: {error}")
+        st.error(safe_error_message(error, operation="progress_quiz_metrics", action="Study progress"))
         return
     analytics = calculate_progress_analytics(attempts, answers)
     if not analytics["completed_attempts"]:

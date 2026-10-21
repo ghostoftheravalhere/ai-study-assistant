@@ -1,6 +1,7 @@
 """Explicit, local-only Tesseract OCR for selected PDF pages."""
 
 import io
+import logging
 import sqlite3
 import subprocess
 from dataclasses import dataclass
@@ -63,7 +64,9 @@ class TesseractEngine:
     def version(self) -> str:
         try:
             return str(self._api.get_tesseract_version())[:80]
-        except Exception:
+        except Exception as error:
+            from utils.safe_logging import log_failure
+            log_failure("tesseract_version", error, level=logging.WARNING)
             return "unknown"
 
 

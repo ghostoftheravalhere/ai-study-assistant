@@ -16,6 +16,7 @@ from pages.data_management import render_data_management
 from pages.question_generator import render_question_generator
 from pages.quiz import render_quiz
 from pages.settings import render_settings
+from pages.system_health import render_system_health
 from pages.summarizer import render_summarizer
 from utils.database import initialize_database
 
@@ -41,8 +42,10 @@ def main() -> None:
     """Initialize the local database and render the selected page."""
     try:
         initialize_database()
-    except RuntimeError:
-        st.error("The local study database could not be opened. Check the configured database location and permissions.")
+    except RuntimeError as error:
+        from utils.safe_logging import log_failure
+        log_failure("database_startup", error)
+        st.error("StudyMate could not open or update the local database. It may be locked, damaged, or incompatible with this version. Close other database users. Do not delete the database; preserve the file and follow the Deployment, Diagnostics, and Recovery instructions in README.md to restore a verified backup.")
         st.stop()
     load_stylesheet()
     selected_page = render_sidebar()
@@ -60,6 +63,7 @@ def main() -> None:
         "Data Management": render_data_management,
         "Study Progress": render_progress,
         "Settings": render_settings,
+        "System Health": render_system_health,
     }
     page_renderers.get(selected_page, render_dashboard)()
 

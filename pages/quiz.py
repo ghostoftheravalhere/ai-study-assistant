@@ -26,6 +26,7 @@ from utils.quiz_repository import (
     save_attempt_answer,
     submit_attempt,
 )
+from utils.safe_logging import safe_error_message
 from utils.flashcard_repository import FlashcardRepositoryError, create_card, list_decks
 from utils.quiz_service import generate_document_quiz
 
@@ -302,7 +303,7 @@ def _render_history() -> None:
         in_progress = list_in_progress_attempts()
         history = list_attempt_history()
     except Exception as error:
-        st.error(f"Quiz history could not be loaded: {error}")
+        st.error(safe_error_message(error, operation="quiz_history_load", action="Quiz history loading"))
         return
     for item in in_progress:
         with st.container(border=True):

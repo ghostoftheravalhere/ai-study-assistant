@@ -8,6 +8,8 @@ AI Study Assistant is a diploma engineering project that brings document-based q
 
 **Phases 6–10 are complete:** quizzes, flashcards, spaced repetition, progress analytics, local OCR, the local-first study planner, and local data management are available below.
 
+Phase 11 adds deployment diagnostics, safer startup and migration handling, and automated CI. System Health reports optional-feature status separately from core readiness.
+
 - Responsive Streamlit dashboard with custom CSS and working sidebar navigation.
 - Four dashboard metrics based only on recorded local activity. New installations show zero counts and no average score until real activity exists.
 - Quick actions and feature cards for the study tools.
@@ -32,6 +34,7 @@ AI Study Assistant is a diploma engineering project that brings document-based q
 - Local Tesseract OCR for selected scanned PDF pages, with page-aware text, retryable status, and native-text preservation.
 - Local study planner with subjects, topics, exams, daily availability, deterministic exam revision proposals, editable tasks, missed-task recovery, and actual study-session history.
 - Validated database-only and complete database-plus-PDF backups, confirmation-gated restore with retained safety backups, selected CSV/JSON exports, and downloadable local HTML study reports.
+- Local System Health checks for Python, dependencies, configuration, SQLite, storage, OCR, semantic indexing, and Gemini readiness without network calls, OCR, or model loading.
 
 ## Technology
 
@@ -60,6 +63,7 @@ ai-study-assistant/
 │   ├── flashcards.py
 │   ├── documents.py
 │   ├── data_management.py
+│   ├── system_health.py
 │   ├── document_search.py
 │   ├── progress.py
 │   ├── planner.py
@@ -73,7 +77,8 @@ ai-study-assistant/
 │   ├── test_ocr.py
 │   ├── test_quiz.py
 │   ├── test_documents.py
-│   └── test_data_management.py
+│   ├── test_data_management.py
+│   └── test_diagnostics.py
 ├── utils/
 │   ├── ai_prompts.py
 │   ├── flashcard_repository.py
@@ -94,7 +99,10 @@ ai-study-assistant/
 │   ├── planner_service.py
 │   ├── backup_service.py
 │   ├── data_export_service.py
-│   └── study_report_service.py
+│   ├── study_report_service.py
+│   ├── diagnostics.py
+│   └── safe_logging.py
+├── .github/workflows/tests.yml
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
@@ -278,6 +286,51 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
+## Deployment, Diagnostics, and Recovery
+
+### Supported installation
+
+StudyMate supports Python 3.10 or newer. A clean Windows setup uses a local virtual environment and installs runtime packages from `requirements.txt`; `requirements-dev.txt` adds pytest for development. Pillow is listed directly for local OCR image rendering. Tesseract itself is a separate Windows installation and is not supplied by pip.
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+python -m streamlit run app.py
+```
+
+Gemini is optional for local use. Set `GEMINI_API_KEY_1` (and optionally numbered keys 2–4) or configure Streamlit secrets when you want Gemini features. Personal keys can instead be activated from **Settings** and remain in the current Streamlit session. Health checks show only whether a selected key mode is configured; they do not verify credentials or make a Gemini request.
+
+Install Tesseract only if you need OCR for scanned PDFs. Use the Windows setup above and install the language data you need. **System Health** checks the Python wrapper, executable, and selected language list, but it never OCRs a document. A missing Tesseract executable or language pack disables scanned-page OCR only.
+
+Sentence Transformers and FAISS power local semantic indexing. The embedding model is loaded lazily when indexing/search first needs it; the first use may download it and requires network access unless it is already cached. System Health checks the configured model and local cache without loading or downloading it. Gemini requests also require network access. Local PDFs, quiz scoring, flashcard review, planner, backups, and exports do not require Gemini.
+
+### Readiness and recovery
+
+Open **System Health** from the sidebar. **CORE READY** means the supported Python runtime, startup packages, database, and database-folder access are available. Warnings for Gemini, Tesseract, or the embedding model are optional-feature status, not a failure of local study tools. The page shows effective local storage locations and free space, optional dependency versions, schema compatibility, and actionable next steps. A deep database integrity check runs only after you select **Run database integrity check**; it is read-only. Basic checks do not run OCR, contact Gemini, or load the embedding model. They may create missing configured data, document, and index folders, then remove their temporary write probes.
+
+The default SQLite file is `study_assistant.db` in the repository. PDFs live under `%LOCALAPPDATA%\StudyMate\documents` on Windows. Configuration overrides are listed in the local storage section above. Database schema changes are additive and run inside a transaction. Startup never deletes or resets an existing database; a failed migration rolls back its schema changes and the app reports a safe recovery message.
+
+- **Database locked:** close other StudyMate windows and SQLite/database tools using the same file, then retry. Do not copy a live database while it is being written; use **Data Management → Create backup**.
+- **Database corruption or incompatible schema:** keep the original database and its `-wal`/`-shm` sidecars; do not delete them. If StudyMate cannot start, first make a separate filesystem copy of those files. Then set `STUDY_ASSISTANT_DB` to a new recovery path, launch StudyMate there, and use **Data Management → Restore backup** with a previously verified Phase 10 backup. For example, in PowerShell set `$env:STUDY_ASSISTANT_DB = "$env:LOCALAPPDATA\StudyMate\recovery.sqlite3"` before launching. Keep the recovery path configured after the restore. A newer schema requires the matching newer StudyMate version.
+- **Model download failure:** check network access and available disk space, then retry indexing from **My Documents**. Health checks do not download a model; they identify whether a local cache appears to exist. Do not delete SQLite vectors or document data as a model troubleshooting step.
+- **OCR failure:** open **System Health** to distinguish a missing Python wrapper, executable, or language pack. Correct `STUDY_ASSISTANT_TESSERACT_CMD` or install the missing language data, restart the app, and retry OCR from the document card. OCR errors preserve already completed page results.
+- **PDF upload failure:** confirm the PDF is not password protected or damaged, stays within the configured per-file limit, and that the configured document folder is writable. The original upload name is metadata only; stored names are generated locally.
+
+To run CI checks locally, activate the project environment and run:
+
+```powershell
+python -m pip check
+python -m compileall -q app.py components pages utils tests
+python -m pytest -q
+git diff --check
+```
+
+GitHub Actions runs these checks on pushes to `master` and pull requests targeting `master`, using Python 3.11 and 3.12. The workflow installs runtime and test dependencies, checks dependency consistency and compilation, runs the full suite, and checks changed lines for whitespace errors. Tests run in offline Hugging Face mode, do not require a Gemini key or live Gemini calls, and do not install Tesseract. CI does not publish or deploy the app.
+
+StudyMate is a local, single-user application without authentication, cloud synchronization, encryption for backups, or multi-user isolation. A readiness check is a local configuration/storage check, not a penetration test or a guarantee of production security. Keep backups private and verified.
+
 ## Current limitations
 
 - Quiz questions depend on Gemini generation quality; invalid or duplicate generated questions are discarded, and at least five valid questions are needed to save a quiz. Source page references are limited to pages present in the supplied PDF passages.
@@ -303,5 +356,6 @@ pytest
 8. **Phase 8 — Local OCR:** complete — page-aware Tesseract OCR for scanned and mixed PDFs, safe retries, semantic reindexing, and connected study tools.
 9. **Phase 9 — Study planner:** complete — local subjects, exams, revision planning, tasks, and session history.
 10. **Phase 10 — Data management:** complete — validated backups and restore, selected data exports, and downloadable study reports.
+11. **Phase 11 — Deployment and reliability:** complete — local readiness diagnostics, safe startup guidance, transactional additive schema setup, and GitHub Actions regression checks.
 
 All phases will continue in this repository.

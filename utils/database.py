@@ -34,6 +34,9 @@ def initialize_database(database_path=None) -> None:
             current_version = connection.execute("PRAGMA user_version").fetchone()[0]
             if current_version > DATABASE_SCHEMA_VERSION:
                 raise sqlite3.DatabaseError("The database was created by a newer StudyMate version.")
+            # Keep additive DDL, column backfills, indexes, and user_version in
+            # one transaction so an interrupted upgrade can be retried cleanly.
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """CREATE TABLE IF NOT EXISTS study_activity (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

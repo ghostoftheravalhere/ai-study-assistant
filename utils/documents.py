@@ -26,8 +26,12 @@ def _stored_path(stored_filename: str) -> Path:
     if Path(stored_filename).name != stored_filename or not stored_filename.endswith(".pdf"):
         raise DocumentError("The stored document reference is invalid.")
     path = DOCUMENTS_DIR / stored_filename
-    if path.parent.resolve() != DOCUMENTS_DIR.resolve():
-        raise DocumentError("The stored document reference is invalid.")
+    try:
+        root = DOCUMENTS_DIR.resolve()
+        if path.is_symlink() or path.resolve(strict=False).parent != root:
+            raise DocumentError("The stored document reference is outside the document folder or is a symbolic link.")
+    except (OSError, RuntimeError) as error:
+        raise DocumentError("The stored document reference is invalid.") from error
     return path
 
 

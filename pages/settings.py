@@ -134,7 +134,9 @@ def render_settings() -> None:
                 st.session_state[f"{_TEST_STATUS_PREFIX}{mode_name}"] = "failed"
                 st.session_state[f"{_TEST_ERROR_PREFIX}{mode_name}"] = str(error)
                 st.rerun()
-            except Exception:
+            except Exception as error:
+                from utils.safe_logging import log_failure
+                log_failure("gemini_connection_test", error)
                 st.session_state[f"{_TEST_STATUS_PREFIX}{mode_name}"] = "failed"
                 st.session_state[f"{_TEST_ERROR_PREFIX}{mode_name}"] = "The connection test failed unexpectedly. Check your key and model access, then try again."
                 st.rerun()

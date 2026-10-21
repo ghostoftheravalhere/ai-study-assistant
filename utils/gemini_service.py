@@ -1,6 +1,7 @@
 """Google Gen AI integration, context selection, and response validation."""
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -104,9 +105,11 @@ def _read_secret_source() -> Mapping[str, Any]:
         return {name: st.secrets.get(name, "") for name in names}
     except (StreamlitSecretNotFoundError, FileNotFoundError):
         return {}
-    except Exception:
+    except Exception as error:
         # Malformed local secrets configuration should behave like missing keys,
         # not crash unrelated pages or leak parser details into the UI.
+        from utils.safe_logging import log_failure
+        log_failure("read_gemini_secrets", error, level=logging.WARNING)
         return {}
 
 
@@ -375,8 +378,9 @@ class GeminiService:
                     if close:
                         try:
                             close()
-                        except Exception:
-                            pass
+                        except Exception as error:
+                            from utils.safe_logging import log_failure
+                            log_failure("close_gemini_client", error, level=logging.WARNING)
 
         if last_error is not None and not succeeded:
             attempted = ", ".join(attempted_slots)
