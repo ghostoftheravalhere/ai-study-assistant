@@ -21,6 +21,9 @@ env/
 *.db
 *.sqlite
 *.sqlite3
+data/
+documents/
+*.pdf
 .streamlit/secrets.toml
 
 # Editors and operating systems

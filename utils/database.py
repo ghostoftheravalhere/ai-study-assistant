@@ -21,7 +21,7 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 
 def initialize_database() -> None:
-    """Create the minimal activity table used for dashboard statistics."""
+    """Create new tables without changing or clearing existing user data."""
     try:
         DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
         with get_connection() as connection:
@@ -32,6 +32,19 @@ def initialize_database() -> None:
                     description TEXT NOT NULL,
                     score REAL,
                     created_at TEXT NOT NULL
+                )"""
+            )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS documents (
+                    id TEXT PRIMARY KEY,
+                    original_filename TEXT NOT NULL,
+                    stored_filename TEXT NOT NULL UNIQUE,
+                    file_size_bytes INTEGER NOT NULL CHECK (file_size_bytes > 0),
+                    page_count INTEGER NOT NULL CHECK (page_count > 0),
+                    uploaded_at TEXT NOT NULL,
+                    extraction_status TEXT NOT NULL CHECK (extraction_status IN ('ready', 'no_text')),
+                    extracted_text TEXT NOT NULL,
+                    content_sha256 TEXT NOT NULL UNIQUE
                 )"""
             )
     except (OSError, sqlite3.Error) as error:
@@ -50,15 +63,14 @@ def record_activity(activity_type: str, description: str, score: float | None = 
 def get_dashboard_stats() -> dict[str, int | float]:
     """Return counts and the average score from recorded activity only."""
     with get_connection() as connection:
+        document_count = connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
         rows = connection.execute(
             """SELECT activity_type, COUNT(*) AS total, AVG(score) AS average_score
                FROM study_activity GROUP BY activity_type"""
         ).fetchall()
-    stats: dict[str, int | float] = {"documents": 0, "questions": 0, "quizzes": 0, "average_score": 0}
+    stats: dict[str, int | float] = {"documents": document_count, "questions": 0, "quizzes": 0, "average_score": 0}
     for row in rows:
-        if row["activity_type"] == "document_uploaded":
-            stats["documents"] = row["total"]
-        elif row["activity_type"] == "question_practiced":
+        if row["activity_type"] == "question_practiced":
             stats["questions"] = row["total"]
         elif row["activity_type"] == "quiz_completed":
             stats["quizzes"] = row["total"]

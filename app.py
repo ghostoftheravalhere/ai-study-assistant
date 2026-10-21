@@ -35,7 +35,11 @@ def load_stylesheet() -> None:
 
 def main() -> None:
     """Initialize the local database and render the selected page."""
-    initialize_database()
+    try:
+        initialize_database()
+    except RuntimeError:
+        st.error("The local study database could not be opened. Check the configured database location and permissions.")
+        st.stop()
     load_stylesheet()
     selected_page = render_sidebar()
 
