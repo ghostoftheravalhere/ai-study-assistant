@@ -7,7 +7,12 @@ import streamlit as st
 from components.document_picker import render_document_picker
 from utils.config import MAX_DOCUMENT_CONTEXT_CHARS
 from utils.database import record_ai_activity
-from utils.gemini_service import GeminiService, GeminiServiceError, is_gemini_configured, load_gemini_model
+from utils.gemini_service import (
+    GeminiServiceError,
+    get_gemini_service_for_session,
+    is_gemini_available_for_session,
+    load_gemini_model,
+)
 
 
 def render_question_generator() -> None:
@@ -41,8 +46,8 @@ def render_question_generator() -> None:
     st.caption(
         f"Model: {load_gemini_model()} · Only this PDF's extracted text is sent to Google Gemini."
     )
-    if not is_gemini_configured():
-        st.info("Add GEMINI_API_KEY_1 (or the legacy GEMINI_API_KEY) to your environment or Streamlit secrets to generate questions.")
+    if not is_gemini_available_for_session():
+        st.info("Choose API Settings to activate a personal Gemini API key or switch to configured application keys.")
 
     configuration = {
         "document_id": document["id"],
@@ -56,12 +61,12 @@ def render_question_generator() -> None:
     if st.button(
         button_label,
         type="primary",
-        disabled=not is_gemini_configured(),
+        disabled=not is_gemini_available_for_session(),
         key="generate_questions",
     ):
         try:
             with st.spinner("Building questions from the selected study material…"):
-                result = GeminiService().generate_questions(
+                result = get_gemini_service_for_session().generate_questions(
                     document["extracted_text"],
                     question_type=question_type,
                     difficulty=difficulty,

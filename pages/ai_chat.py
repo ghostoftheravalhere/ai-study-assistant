@@ -17,8 +17,10 @@ from utils.database import (
 from utils.embedding_service import EmbeddingModelError
 from utils.gemini_service import (
     GeminiConfigurationError,
-    GeminiService,
     GeminiServiceError,
+    GEMINI_API_MODE_STATE_KEY,
+    get_gemini_service_for_session,
+    is_gemini_available_for_session,
     is_gemini_configured,
     load_gemini_model,
 )
@@ -27,10 +29,21 @@ from utils.retrieval_service import RetrievalError, RetrievalService, sanitize_s
 
 
 def _render_setup_help() -> None:
-    st.info(
-        "Gemini is not configured yet. Add `GEMINI_API_KEY_1` (or the legacy `GEMINI_API_KEY`) to your environment or to "
-        "`.streamlit/secrets.toml` to generate an AI answer. Your local search results remain available without a Gemini key."
-    )
+    if st.session_state.get(GEMINI_API_MODE_STATE_KEY, "application") == "personal":
+        if is_gemini_configured():
+            message = (
+                "Personal-key mode is selected, but no personal key is active. Activate one in Settings, "
+                "or switch to the application's configured keys."
+            )
+        else:
+            message = "No Gemini key is active. Add and activate a personal key in Settings or configure application keys."
+    else:
+        message = (
+            "Gemini is not configured yet. Open Settings to activate a personal API key, or configure "
+            "`GEMINI_API_KEY_1` (or the legacy `GEMINI_API_KEY`) in your environment or Streamlit secrets. "
+            "Your local search results remain available without a Gemini key."
+        )
+    st.info(message)
 
 
 def _source_payload(passages) -> list[dict]:
@@ -188,10 +201,10 @@ def render_ai_chat() -> None:
         f"Model: {load_gemini_model()} · Local embedding model: {EMBEDDING_MODEL_NAME} · "
         + ("Only retrieved excerpts are sent to Gemini when you submit a document question." if chat_mode != "general" else "General chat sends no document text.")
     )
-    if chat_mode == "general" and not is_gemini_configured():
+    if chat_mode == "general" and not is_gemini_available_for_session():
         _render_setup_help()
         return
-    if chat_mode != "general" and not is_gemini_configured():
+    if chat_mode != "general" and not is_gemini_available_for_session():
         st.info("Local retrieval works without a Gemini key. Add a key to receive an AI-generated answer after searching.")
     prompt = st.chat_input("Ask a study question…", max_chars=4_000)
     if not prompt:
@@ -207,14 +220,14 @@ def render_ai_chat() -> None:
             if not retrieved.passages:
                 st.info("StudyMate could not find relevant indexed passages. Rephrase the question or index/select another document.")
                 return
-            if not is_gemini_configured():
+            if not is_gemini_available_for_session():
                 st.markdown("### Local search results")
                 _render_sources(_source_payload(retrieved.passages), key=f"preview_{request_id}")
                 _render_setup_help()
                 return
 
         with st.spinner("Thinking through the retrieved study evidence…" if retrieved else "Thinking through your question…"):
-            response = GeminiService().answer_chat(
+            response = get_gemini_service_for_session().answer_chat(
                 history,
                 prompt,
                 retrieved_context=retrieved.context if retrieved else None,

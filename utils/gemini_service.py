@@ -62,11 +62,41 @@ class ConfiguredGeminiKey:
     value: str = field(repr=False)
 
 
+GEMINI_API_MODE_STATE_KEY = "gemini_api_mode"
+PERSONAL_GEMINI_API_KEY_STATE_KEY = "personal_gemini_api_key"
+
+
+def is_gemini_available_for_session(session_state: Mapping[str, Any] | None = None) -> bool:
+    """Return whether the selected credential mode has a key for this session."""
+    state = session_state if session_state is not None else st.session_state
+    if state.get(GEMINI_API_MODE_STATE_KEY, "application") == "personal":
+        return bool(str(state.get(PERSONAL_GEMINI_API_KEY_STATE_KEY, "") or "").strip())
+    return is_gemini_configured()
+
+
+def get_gemini_service_for_session(
+    session_state: Mapping[str, Any] | None = None,
+    *,
+    client_factory: Callable[..., Any] = genai.Client,
+) -> "GeminiService":
+    """Build an isolated request service using only this session's selected mode."""
+    state = session_state if session_state is not None else st.session_state
+    if state.get(GEMINI_API_MODE_STATE_KEY, "application") == "personal":
+        personal_key = str(state.get(PERSONAL_GEMINI_API_KEY_STATE_KEY, "") or "")
+        # An empty personal selection must not silently consume application credentials.
+        return GeminiService(personal_api_key=personal_key, client_factory=client_factory)
+    return GeminiService(client_factory=client_factory)
+
+
 def _read_secret_source() -> Mapping[str, Any]:
     try:
         names = ("GEMINI_MODEL", "GEMINI_API_KEY", *(f"GEMINI_API_KEY_{index}" for index in range(1, 5)))
         return {name: st.secrets.get(name, "") for name in names}
     except (StreamlitSecretNotFoundError, FileNotFoundError):
+        return {}
+    except Exception:
+        # Malformed local secrets configuration should behave like missing keys,
+        # not crash unrelated pages or leak parser details into the UI.
         return {}
 
 
@@ -225,10 +255,15 @@ class GeminiService:
         *,
         api_key: str | None = None,
         api_keys: Sequence[str] | None = None,
+        personal_api_key: str | None = None,
         model: str | None = None,
         client_factory: Callable[..., Any] = genai.Client,
     ) -> None:
-        if api_keys is not None:
+        self._personal_key_mode = personal_api_key is not None
+        if personal_api_key is not None:
+            normalized = personal_api_key.strip()
+            self._api_keys = [ConfiguredGeminiKey("personal key", normalized)] if normalized else []
+        elif api_keys is not None:
             self._api_keys = []
             seen: set[str] = set()
             for value in api_keys:
@@ -252,6 +287,10 @@ class GeminiService:
         max_output_tokens: int = 2_048,
     ) -> str:
         if not self._api_keys:
+            if self._personal_key_mode:
+                raise GeminiConfigurationError(
+                    "Your personal Gemini API key is empty or inactive. Enter and activate your key, or switch to the application's configured keys."
+                )
             raise GeminiConfigurationError(
                 "Gemini is not configured yet. Add GEMINI_API_KEY or GEMINI_API_KEY_1 through GEMINI_API_KEY_4 "
                 "to your environment or Streamlit secrets."
@@ -278,6 +317,14 @@ class GeminiService:
             except errors.APIError as error:
                 last_error = error
                 status = getattr(error, "code", None)
+                if self._personal_key_mode and status in (401, 403):
+                    raise GeminiServiceError(
+                        "Gemini rejected your personal API key or its permissions. Check the key, then test it again or clear it to use the application's keys."
+                    ) from None
+                if self._personal_key_mode and status == 429:
+                    raise GeminiServiceError(
+                        "Your personal Gemini API key reached a rate limit or quota. Check your Google account limits, or clear the key to use the application's keys."
+                    ) from None
                 # Only credential/permission and explicit quota/rate-limit HTTP statuses
                 # are safe failover candidates. Other 4xx errors are request failures.
                 if status not in (401, 403, 429):
@@ -302,11 +349,24 @@ class GeminiService:
                 raise GeminiServiceError(
                     f"Could not reach Gemini using {key.slot}. Check your internet connection and try again."
                 ) from None
+            except Exception:
+                # Client/SDK failures can contain request details. Never pass raw SDK
+                # text to the UI because it may include credential-bearing context.
+                if self._personal_key_mode:
+                    raise GeminiServiceError(
+                        "The request using your personal Gemini API key failed. Check your key, model access, and connection; you can also clear the key to use the application's keys."
+                    ) from None
+                raise GeminiServiceError(
+                    "The Gemini request failed unexpectedly. Check the model configuration and try again."
+                ) from None
             finally:
                 if client is not None:
                     close = getattr(client, "close", None)
                     if close:
-                        close()
+                        try:
+                            close()
+                        except Exception:
+                            pass
 
         if last_error is not None and not succeeded:
             attempted = ", ".join(attempted_slots)
@@ -361,6 +421,14 @@ class GeminiService:
         )
         answer = self._generate(contents, system_instruction=system_instruction)
         return AITextResult(answer, False, 0)
+
+    def test_connection(self) -> None:
+        """Send one small explicit connectivity check through the selected key mode."""
+        self._generate(
+            "Reply with exactly OK.",
+            system_instruction="This is a brief API connectivity check. Reply with OK only.",
+            max_output_tokens=8,
+        )
 
     def summarize_document(self, document_text: str, summary_format: str) -> AITextResult:
         selection = select_document_context(document_text)

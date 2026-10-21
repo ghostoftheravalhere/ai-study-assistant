@@ -8,7 +8,12 @@ from components.document_picker import render_document_picker
 from utils.ai_prompts import SUMMARY_FORMATS
 from utils.config import MAX_DOCUMENT_CONTEXT_CHARS
 from utils.database import record_ai_activity
-from utils.gemini_service import GeminiService, GeminiServiceError, is_gemini_configured, load_gemini_model
+from utils.gemini_service import (
+    GeminiServiceError,
+    get_gemini_service_for_session,
+    is_gemini_available_for_session,
+    load_gemini_model,
+)
 
 
 def render_summarizer() -> None:
@@ -37,18 +42,18 @@ def render_summarizer() -> None:
     st.caption(
         f"Model: {load_gemini_model()} · The selected PDF's extracted text is sent to Google Gemini."
     )
-    if not is_gemini_configured():
-        st.info("Add GEMINI_API_KEY_1 (or the legacy GEMINI_API_KEY) to your environment or Streamlit secrets to generate a summary. No key is needed to browse PDFs.")
+    if not is_gemini_available_for_session():
+        st.info("Choose API Settings to activate a personal Gemini API key or switch to configured application keys. No key is needed to browse PDFs.")
 
     if st.button(
         "Regenerate summary" if matches_previous else "Generate summary",
         type="primary",
-        disabled=not is_gemini_configured(),
+        disabled=not is_gemini_available_for_session(),
         key="generate_summary",
     ):
         try:
             with st.spinner("Reading the selected study material…"):
-                result = GeminiService().summarize_document(document["extracted_text"], summary_format)
+                result = get_gemini_service_for_session().summarize_document(document["extracted_text"], summary_format)
             st.session_state[result_key] = {
                 "document_id": document["id"],
                 "filename": document["original_filename"],

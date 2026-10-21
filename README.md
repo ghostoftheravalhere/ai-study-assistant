@@ -117,6 +117,14 @@ If a request receives an authentication/permission response (HTTP 401 or 403) or
 
 Key failover is for using separately configured credentials, not for evading provider restrictions. Keys attached to the same Google Cloud project share that project's Gemini quotas, so adding keys from one project does not increase its project-level rate limits. The dashboard, SQLite activity, PDF uploads, and local document library work without any keys; Gemini features need at least one valid key.
 
+## Using Your Own Gemini API Key
+
+BYOK (“bring your own key”) lets a student authenticate Gemini requests with their own Google AI Studio key. Open **Settings** in the sidebar and scroll to **API Settings**. Select **Use my own Gemini API key**, enter the value in **Your Gemini API Key** (the field is masked), then choose **Activate personal key**. Activation only selects the key for the current Streamlit session; it does not verify it. Choose **Test Connection** to send a small request and confirm access. Choose **Clear personal key** to remove it from the session and return to the application's configured-key mode.
+
+In application mode, StudyMate continues to use `GEMINI_API_KEY_1` through `GEMINI_API_KEY_4`, then the supported legacy `GEMINI_API_KEY`, from the environment or `.streamlit/secrets.toml`. Environment values take precedence over secrets per slot, and the existing bounded key rotation/failover behavior is preserved. If no personal key is active and application mode is selected, the configured keys are used when available. If personal mode is selected but no key is active, Gemini requests remain unavailable instead of silently using the application's keys. A failing personal key also never falls back to configured application credentials; correct it or clear it explicitly.
+
+The personal key lives only in the active Streamlit session's memory. StudyMate does not save it in SQLite, chat history, files, secrets, environment variables, or activity records. It is still sent to and processed by the application's server so that server can authenticate requests to Google Gemini. Only enter keys into deployments you trust. Use **Clear personal key** when finished; closing the session also ends its session-scoped state. Google controls API availability, usage limits, billing, and applicable policies under the current terms for your account. Create a key at [Google AI Studio](https://aistudio.google.com/app/apikey).
+
 ## Use the Gemini study tools
 
 - **AI Chat:** choose General study chat, Ask about one indexed document, or Ask across all indexed documents. Document modes retrieve relevant passages locally first; Gemini receives only those passages, which are displayed below answers with their PDF names, pages, and snippets. Conversations are separated by mode and document scope. Start a new chat or confirm deletion to clear a conversation.
@@ -194,7 +202,7 @@ pytest
 - Similarity scores rank passages; they are not confidence probabilities. Gemini citations are checked against retrieved source/page pairs, but generated answers can still misinterpret evidence.
 - Dashboard activity metrics remain at zero until the related activity is recorded.
 - Progress data is stored in a local SQLite file and is not synchronized across devices.
-- Document chat, summaries, and generated questions use a bounded leading-text window. Semantic retrieval and retrieval-augmented generation are planned for Phase 4.
+- Summaries and generated questions use a bounded leading-text window; document chat uses the Phase 4 semantic retrieval pipeline.
 
 ## Planned development phases
 
@@ -202,6 +210,7 @@ pytest
 2. **Phase 2 — Documents:** complete — PDF upload, text extraction, and document library.
 3. **Phase 3 — AI study tools:** complete — Gemini chat, summaries, and validated question generation grounded in selected study material.
 4. **Phase 4 — Retrieval:** complete — local embeddings, FAISS semantic search, and passage-grounded document chat.
-5. **Phase 5 — Practice and progress:** interactive quizzes, scoring, and study progress insights.
+5. **Phase 5 — BYOK:** complete — session-only personal Gemini keys, explicit connection testing, and application-key selection.
+6. **Phase 6 — Practice and progress:** interactive quizzes, scoring, and study progress insights.
 
 All phases will continue in this repository.

@@ -16,10 +16,14 @@ from streamlit.testing.v1 import AppTest
 from utils import database
 from utils import gemini_service as gemini_service_module
 from utils.gemini_service import (
+    GEMINI_API_MODE_STATE_KEY,
+    PERSONAL_GEMINI_API_KEY_STATE_KEY,
     GeminiConfigurationError,
     GeminiResponseError,
     GeminiService,
     GeminiServiceError,
+    get_gemini_service_for_session,
+    is_gemini_available_for_session,
     is_gemini_configured,
     load_gemini_api_key,
     load_gemini_api_keys,
@@ -175,6 +179,210 @@ def test_service_uses_streamlit_secret_key(monkeypatch: pytest.MonkeyPatch) -> N
     result = GeminiService(client_factory=factory).answer_chat([], "hello")
     assert result.text == "A clear model response."
     assert client_keys == ["streamlit-secret-two"]
+
+
+def test_personal_key_takes_precedence_over_configured_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY_1", "application-key-do-not-use")
+    attempted: list[str] = []
+
+    def factory(*, api_key: str) -> FakeClient:
+        attempted.append(api_key)
+        return FakeClient(FakeModels())
+
+    service = GeminiService(
+        personal_api_key="student-personal-key",
+        api_keys=["explicit-application-key"],
+        client_factory=factory,
+    )
+    service.answer_chat([], "Explain a concept")
+    assert attempted == ["student-personal-key"]
+
+
+def test_session_key_selection_uses_app_keys_when_personal_mode_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY_1", "application-key")
+    attempted: list[str] = []
+
+    def factory(*, api_key: str) -> FakeClient:
+        attempted.append(api_key)
+        return FakeClient(FakeModels())
+
+    state = {GEMINI_API_MODE_STATE_KEY: "application", PERSONAL_GEMINI_API_KEY_STATE_KEY: "stored-but-inactive"}
+    assert is_gemini_available_for_session(state)
+    get_gemini_service_for_session(state, client_factory=factory).answer_chat([], "hello")
+    assert attempted == ["application-key"]
+
+
+def test_empty_personal_key_is_rejected_without_falling_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY_1", "application-key-must-not-be-used")
+    attempted: list[str] = []
+    state = {GEMINI_API_MODE_STATE_KEY: "personal", PERSONAL_GEMINI_API_KEY_STATE_KEY: "  "}
+    assert not is_gemini_available_for_session(state)
+    service = get_gemini_service_for_session(state, client_factory=lambda **kwargs: attempted.append(kwargs))
+    with pytest.raises(GeminiConfigurationError, match="personal Gemini API key is empty"):
+        service.test_connection()
+    assert attempted == []
+
+
+def test_clearing_session_personal_key_restores_application_key_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY_1", "application-key")
+    state = {GEMINI_API_MODE_STATE_KEY: "personal", PERSONAL_GEMINI_API_KEY_STATE_KEY: "student-key"}
+    personal_attempts: list[str] = []
+    app_attempts: list[str] = []
+    get_gemini_service_for_session(
+        state,
+        client_factory=lambda **kwargs: (personal_attempts.append(kwargs["api_key"]) or FakeClient(FakeModels())),
+    ).answer_chat([], "personal request")
+    state.pop(PERSONAL_GEMINI_API_KEY_STATE_KEY)
+    state[GEMINI_API_MODE_STATE_KEY] = "application"
+    get_gemini_service_for_session(
+        state,
+        client_factory=lambda **kwargs: (app_attempts.append(kwargs["api_key"]) or FakeClient(FakeModels())),
+    ).answer_chat([], "application request")
+    assert personal_attempts == ["student-key"]
+    assert app_attempts == ["application-key"]
+
+
+def test_personal_auth_failure_is_safe_and_never_falls_back_to_app_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    secret = "student-private-key-marker"
+    monkeypatch.setenv("GEMINI_API_KEY_1", "owner-key-must-not-be-used")
+    attempted: list[str] = []
+
+    def factory(*, api_key: str) -> FakeClient:
+        attempted.append(api_key)
+        return FakeClient(FakeModels(error=errors.APIError(403, {"message": secret})))
+
+    service = GeminiService(personal_api_key=secret, client_factory=factory)
+    with pytest.raises(GeminiServiceError, match="personal API key") as error:
+        service.answer_chat([], "hello")
+    assert attempted == [secret]
+    assert secret not in str(error.value)
+    assert "owner-key-must-not-be-used" not in str(error.value)
+
+
+def test_session_a_personal_key_is_not_selected_for_session_b(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY_1", "application-key")
+    attempted: list[str] = []
+
+    def factory(*, api_key: str) -> FakeClient:
+        attempted.append(api_key)
+        return FakeClient(FakeModels())
+
+    session_a = {GEMINI_API_MODE_STATE_KEY: "personal", PERSONAL_GEMINI_API_KEY_STATE_KEY: "session-a-key"}
+    session_b = {GEMINI_API_MODE_STATE_KEY: "application"}
+    get_gemini_service_for_session(session_a, client_factory=factory).answer_chat([], "A")
+    get_gemini_service_for_session(session_b, client_factory=factory).answer_chat([], "B")
+    assert attempted == ["session-a-key", "application-key"]
+
+
+def test_connection_test_is_a_small_explicit_request_and_uses_mocked_client() -> None:
+    models = FakeModels(SimpleNamespace(text="OK"))
+    client = FakeClient(models)
+    attempted: list[str] = []
+
+    def factory(*, api_key: str) -> FakeClient:
+        attempted.append(api_key)
+        return client
+
+    service = GeminiService(personal_api_key="private-connection-key", model="test-model", client_factory=factory)
+    service.test_connection()
+    request = models.calls[0]
+    assert attempted == ["private-connection-key"]
+    assert request["model"] == "test-model"
+    assert request["config"].max_output_tokens == 8
+    assert "private-connection-key" not in str(request["contents"])
+    assert client.closed
+
+
+def test_session_personal_key_never_enters_sqlite_or_chat_records(ai_database: Path) -> None:
+    secret = "private-session-key-marker"
+    conversation_id = database.create_conversation()
+    database.save_chat_exchange(conversation_id, "hello", "safe answer", "byok-test-request")
+    with sqlite3.connect(ai_database) as connection:
+        all_text = " ".join(
+            str(value)
+            for table in ("chat_conversations", "chat_messages", "study_activity")
+            for row in connection.execute(f"SELECT * FROM {table}")
+            for value in row
+        )
+        columns = {row[1].casefold() for row in connection.execute("PRAGMA table_info(chat_conversations)")}
+    assert secret not in all_text
+    assert not any("api_key" in column or "credential" in column for column in columns)
+
+
+def test_personal_key_errors_do_not_leak_through_logs_or_user_error(caplog: pytest.LogCaptureFixture) -> None:
+    secret = "private-key-error-marker"
+    service, _, _ = make_service(error=errors.APIError(403, {"message": secret}), api_key=secret)
+    with pytest.raises(GeminiServiceError) as error:
+        GeminiService(personal_api_key=secret, client_factory=service._client_factory).answer_chat([], "hello")
+    assert secret not in str(error.value)
+    assert secret not in caplog.text
+
+
+def test_personal_session_service_routes_chat_rag_summary_and_questions_through_one_key() -> None:
+    secret = "student-session-key"
+    question_json = json.dumps({"questions": [{"question": "What?", "expected_answer": "This."}]})
+
+    class QueuedModels:
+        def __init__(self) -> None:
+            self.responses = ["General answer.", "RAG answer.", "A study summary.", question_json]
+            self.calls: list[dict[str, Any]] = []
+
+        def generate_content(self, **kwargs: Any) -> Any:
+            self.calls.append(kwargs)
+            return SimpleNamespace(text=self.responses.pop(0))
+
+    models = QueuedModels()
+    attempted: list[str] = []
+    client = FakeClient(models)
+
+    def factory(*, api_key: str) -> FakeClient:
+        attempted.append(api_key)
+        return client
+
+    state = {GEMINI_API_MODE_STATE_KEY: "personal", PERSONAL_GEMINI_API_KEY_STATE_KEY: secret}
+    service = get_gemini_service_for_session(state, client_factory=factory)
+    assert service.answer_chat([], "general").text == "General answer."
+    assert service.answer_chat([], "RAG", retrieved_context="Retrieved source passage.").text == "RAG answer."
+    assert service.summarize_document("Study facts", "Short").text == "A study summary."
+    questions = service.generate_questions(
+        "Study facts", question_type="Short answer", difficulty="Easy", count=1,
+        include_answers=True, include_explanations=False,
+    )
+    assert questions.questions[0]["expected_answer"] == "This."
+    assert attempted == [secret] * 4
+
+
+def test_api_settings_page_exposes_masked_key_and_explicit_test_controls(ai_database: Path) -> None:
+    app_path = Path(__file__).resolve().parents[1] / "app.py"
+    app = AppTest.from_file(str(app_path)).run()
+    app.button(key="nav_Settings").click().run()
+    assert not app.exception
+    assert any("API Settings" in item.value for item in app.markdown)
+    app.radio(key=GEMINI_API_MODE_STATE_KEY).set_value("personal").run()
+    assert any(
+        item.label == "Your Gemini API Key"
+        and item.proto.DESCRIPTOR.fields_by_name["type"].enum_type.values_by_number[item.proto.type].name == "PASSWORD"
+        for item in app.text_input
+    )
+    assert any(item.label == "Test Connection" for item in app.button)
+
+
+def test_api_settings_activation_and_clear_are_session_only(ai_database: Path) -> None:
+    app_path = Path(__file__).resolve().parents[1] / "app.py"
+    app = AppTest.from_file(str(app_path)).run()
+    app.button(key="nav_Settings").click().run()
+    app.radio(key=GEMINI_API_MODE_STATE_KEY).set_value("personal").run()
+    app.text_input(key="personal_gemini_api_key_input").set_value("student-session-only-secret").run()
+    app.button(key="activate_personal_gemini_key").click().run()
+    assert not app.exception
+    assert app.session_state[PERSONAL_GEMINI_API_KEY_STATE_KEY] == "student-session-only-secret"
+    assert app.session_state[GEMINI_API_MODE_STATE_KEY] == "personal"
+    assert app.session_state["personal_gemini_api_key_input"] == ""
+    assert not any("student-session-only-secret" in item.value for item in app.markdown)
+    app.button(key="clear_personal_gemini_key").click().run()
+    assert not app.exception
+    assert PERSONAL_GEMINI_API_KEY_STATE_KEY not in app.session_state
+    assert app.session_state[GEMINI_API_MODE_STATE_KEY] == "application"
 
 
 def test_database_migrates_phase_two_schema_without_losing_documents_or_activity(
