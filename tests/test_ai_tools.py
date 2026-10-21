@@ -14,6 +14,7 @@ from google.genai import errors, types
 from streamlit.testing.v1 import AppTest
 
 from utils import database
+from utils import gemini_service as gemini_service_module
 from utils.gemini_service import (
     GeminiConfigurationError,
     GeminiResponseError,
@@ -21,10 +22,19 @@ from utils.gemini_service import (
     GeminiServiceError,
     is_gemini_configured,
     load_gemini_api_key,
+    load_gemini_api_keys,
     load_gemini_model,
     parse_question_response,
     select_document_context,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolate_gemini_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("GEMINI_API_KEY", *(f"GEMINI_API_KEY_{index}" for index in range(1, 5))):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.setattr(gemini_service_module, "_read_secret_source", lambda: {})
 
 
 @pytest.fixture
@@ -69,6 +79,24 @@ def make_service(
     return service, models, client
 
 
+def make_failover_service(
+    keys: list[str], outcomes: dict[str, Any]
+) -> tuple[GeminiService, list[str], list[FakeClient]]:
+    attempted: list[str] = []
+    clients: list[FakeClient] = []
+
+    def factory(*, api_key: str) -> FakeClient:
+        attempted.append(api_key)
+        outcome = outcomes[api_key]
+        error = outcome if isinstance(outcome, Exception) else None
+        models = FakeModels(SimpleNamespace(text=outcome) if error is None else None, error)
+        client = FakeClient(models)
+        clients.append(client)
+        return client
+
+    return GeminiService(api_keys=keys, model="test-model", client_factory=factory), attempted, clients
+
+
 def test_app_and_ai_pages_import_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     assert not is_gemini_configured()
@@ -96,6 +124,57 @@ def test_key_and_model_load_from_environment_or_secrets_without_logging(monkeypa
     assert load_gemini_api_key({"GEMINI_API_KEY": "different-secret"}) == "environment-secret"
     assert load_gemini_model({"GEMINI_MODEL": "different-model"}) == "environment-model"
     assert "environment-secret" not in repr(GeminiService())
+
+
+def test_no_keys_one_key_four_keys_and_legacy_compatibility(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert load_gemini_api_keys() == []
+    monkeypatch.setenv("GEMINI_API_KEY_1", "one-key")
+    assert [key.value for key in load_gemini_api_keys()] == ["one-key"]
+    for index in range(2, 5):
+        monkeypatch.setenv(f"GEMINI_API_KEY_{index}", f"key-{index}")
+    assert [key.value for key in load_gemini_api_keys()] == ["one-key", "key-2", "key-3", "key-4"]
+    monkeypatch.delenv("GEMINI_API_KEY_1")
+    for index in range(2, 5):
+        monkeypatch.delenv(f"GEMINI_API_KEY_{index}")
+    monkeypatch.setenv("GEMINI_API_KEY", "legacy-key")
+    assert load_gemini_api_key() == "legacy-key"
+
+
+def test_empty_duplicate_environment_and_secret_keys_are_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY_1", "   ")
+    monkeypatch.setenv("GEMINI_API_KEY_2", "same")
+    monkeypatch.setenv("GEMINI_API_KEY_3", "same")
+    keys = load_gemini_api_keys({"GEMINI_API_KEY_1": "same", "GEMINI_API_KEY_4": "secret-four"})
+    assert [(key.slot, key.value) for key in keys] == [("key 1", "same"), ("key 4", "secret-four")]
+    assert "same" not in repr(keys)
+
+
+def test_environment_values_override_streamlit_secrets_by_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY_2", "environment-two")
+    keys = load_gemini_api_keys({"GEMINI_API_KEY_1": "secret-one", "GEMINI_API_KEY_2": "secret-two"})
+    assert [(key.slot, key.value) for key in keys] == [
+        ("key 1", "secret-one"),
+        ("key 2", "environment-two"),
+    ]
+
+
+def test_service_uses_streamlit_secret_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        gemini_service_module,
+        "_read_secret_source",
+        lambda: {"GEMINI_API_KEY_2": "streamlit-secret-two", "GEMINI_MODEL": "secret-model"},
+    )
+    models = FakeModels()
+    client = FakeClient(models)
+    client_keys: list[str] = []
+
+    def factory(*, api_key: str) -> FakeClient:
+        client_keys.append(api_key)
+        return client
+
+    result = GeminiService(client_factory=factory).answer_chat([], "hello")
+    assert result.text == "A clear model response."
+    assert client_keys == ["streamlit-secret-two"]
 
 
 def test_database_migrates_phase_two_schema_without_losing_documents_or_activity(
@@ -241,6 +320,74 @@ def test_gemini_network_errors_are_friendly() -> None:
     service, _, _ = make_service(error=httpx.ConnectError("offline", request=request))
     with pytest.raises(GeminiServiceError, match="internet connection"):
         service.answer_chat([], "hello")
+
+
+def test_authentication_failure_uses_next_key_and_succeeds() -> None:
+    secret = "key-secret-one"
+    service, attempted, clients = make_failover_service(
+        [secret, "key-secret-two"],
+        {secret: errors.APIError(401, {"status": "UNAUTHENTICATED"}), "key-secret-two": "success"},
+    )
+    assert service.answer_chat([], "hello").text == "success"
+    assert attempted == [secret, "key-secret-two"]
+    assert all(client.closed for client in clients)
+
+
+def test_first_configured_key_succeeds_without_using_later_keys() -> None:
+    service, attempted, _ = make_failover_service(["first", "second"], {"first": "success", "second": "unused"})
+    assert service.answer_chat([], "hello").text == "success"
+    assert attempted == ["first"]
+
+
+def test_rate_limit_triggers_bounded_failover() -> None:
+    service, attempted, _ = make_failover_service(
+        ["one", "two", "three"],
+        {"one": errors.APIError(429, {"status": "RESOURCE_EXHAUSTED"}), "two": "success", "three": "unused"},
+    )
+    assert service.summarize_document("study text", "Short").text == "success"
+    assert attempted == ["one", "two"]
+
+
+def test_all_four_keys_fail_without_exceeding_four_attempts_or_leaking_keys() -> None:
+    keys = [f"private-key-{index}" for index in range(1, 6)]
+    outcomes = {key: errors.APIError(403, {"status": "PERMISSION_DENIED"}) for key in keys}
+    service, attempted, _ = make_failover_service(keys, outcomes)
+    with pytest.raises(GeminiServiceError, match="No configured Gemini API key could complete") as error:
+        service.generate_questions(
+            "study text", question_type="Short answer", difficulty="Easy", count=1,
+            include_answers=False, include_explanations=False,
+        )
+    assert attempted == keys[:4]
+    assert len(set(attempted)) == 4
+    assert all(key not in str(error.value) for key in keys)
+    assert "key 1" in str(error.value) and "key 4" in str(error.value)
+
+
+def test_invalid_request_does_not_fail_over() -> None:
+    service, attempted, _ = make_failover_service(
+        ["one", "two"], {"one": errors.APIError(400, {"status": "INVALID_ARGUMENT"}), "two": "unused"}
+    )
+    with pytest.raises(GeminiServiceError, match="HTTP 400"):
+        service.answer_chat([], "hello")
+    assert attempted == ["one"]
+
+
+def test_timeout_does_not_resubmit_with_another_key() -> None:
+    timeout = httpx.ReadTimeout("timed out", request=httpx.Request("POST", "https://example.invalid"))
+    service, attempted, _ = make_failover_service(["one", "two"], {"one": timeout, "two": "unused"})
+    with pytest.raises(GeminiServiceError, match="not resubmitted"):
+        service.answer_chat([], "hello")
+    assert attempted == ["one"]
+
+
+def test_authentication_error_does_not_expose_credentials_in_logs(caplog: pytest.LogCaptureFixture) -> None:
+    secret = "super-secret-key-value"
+    service, _, _ = make_failover_service([secret], {secret: errors.APIError(401, {"message": secret})})
+    with pytest.raises(GeminiServiceError) as error:
+        service.answer_chat([], "hello")
+    assert secret not in str(error.value)
+    assert error.value.__cause__ is None
+    assert secret not in caplog.text
 
 
 def test_summary_response_uses_selected_text_and_configured_format() -> None:

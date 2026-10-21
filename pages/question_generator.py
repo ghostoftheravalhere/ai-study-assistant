@@ -42,7 +42,7 @@ def render_question_generator() -> None:
         f"Model: {load_gemini_model()} · Only this PDF's extracted text is sent to Google Gemini."
     )
     if not is_gemini_configured():
-        st.info("Add GEMINI_API_KEY to your environment or Streamlit secrets to generate questions.")
+        st.info("Add GEMINI_API_KEY_1 (or the legacy GEMINI_API_KEY) to your environment or Streamlit secrets to generate questions.")
 
     configuration = {
         "document_id": document["id"],

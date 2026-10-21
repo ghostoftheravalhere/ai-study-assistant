@@ -15,4 +15,4 @@ def render_settings() -> None:
     st.write(f"**Gemini model:** `{load_gemini_model()}`")
     st.write(f"**Gemini API key:** {'Configured' if is_gemini_configured() else 'Not configured'}")
     st.caption("The dashboard and local PDF library work without an API key. AI requests send your prompt and selected document text to Google Gemini.")
-    st.caption("Set GEMINI_API_KEY and optionally GEMINI_MODEL in the environment or Streamlit secrets. The key is never shown in this page.")
+    st.caption("Set GEMINI_API_KEY_1 through GEMINI_API_KEY_4 and optionally GEMINI_MODEL in the environment or Streamlit secrets. The legacy GEMINI_API_KEY remains supported. Keys are never shown on this page.")

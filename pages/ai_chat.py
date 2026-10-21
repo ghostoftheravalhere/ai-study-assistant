@@ -19,7 +19,7 @@ from utils.gemini_service import (
 
 def _render_setup_help() -> None:
     st.info(
-        "Gemini is not configured yet. Add `GEMINI_API_KEY` to your environment or to "
+        "Gemini is not configured yet. Add `GEMINI_API_KEY_1` (or the legacy `GEMINI_API_KEY`) to your environment or to "
         "`.streamlit/secrets.toml` to send AI requests. The key is never shown here."
     )
 

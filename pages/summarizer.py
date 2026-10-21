@@ -38,7 +38,7 @@ def render_summarizer() -> None:
         f"Model: {load_gemini_model()} · The selected PDF's extracted text is sent to Google Gemini."
     )
     if not is_gemini_configured():
-        st.info("Add GEMINI_API_KEY to your environment or Streamlit secrets to generate a summary. No key is needed to browse PDFs.")
+        st.info("Add GEMINI_API_KEY_1 (or the legacy GEMINI_API_KEY) to your environment or Streamlit secrets to generate a summary. No key is needed to browse PDFs.")
 
     if st.button(
         "Regenerate summary" if matches_previous else "Generate summary",

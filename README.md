@@ -74,10 +74,13 @@ Get an API key from [Google AI Studio](https://aistudio.google.com/apikey) and f
 
 ### PowerShell environment variables
 
-Set the key for the current PowerShell window before launching the app:
+Set one or more keys for the current PowerShell window before launching the app. Numbered keys are tried in order; use only keys you are authorized to use:
 
 ```powershell
-$env:GEMINI_API_KEY = "paste-your-key-here"
+$env:GEMINI_API_KEY_1 = "paste-your-first-key-here"
+$env:GEMINI_API_KEY_2 = "paste-your-second-key-here" # Optional
+$env:GEMINI_API_KEY_3 = "" # Optional
+$env:GEMINI_API_KEY_4 = "" # Optional
 $env:GEMINI_MODEL = "gemini-3.8-flash"
 $env:STUDY_ASSISTANT_MAX_CONTEXT_CHARS = "40000"
 streamlit run app.py
@@ -87,14 +90,23 @@ streamlit run app.py
 
 ### Streamlit secrets
 
-Alternatively, create `.streamlit/secrets.toml` in the project directory. It is excluded from Git:
+Alternatively, create `.streamlit/secrets.toml` in the project directory. It is excluded from Git. Configure one or more numbered keys, leaving unused entries out or empty:
 
 ```toml
-GEMINI_API_KEY = "paste-your-key-here"
+GEMINI_API_KEY_1 = "paste-your-first-key-here"
+GEMINI_API_KEY_2 = "paste-your-second-key-here"
+GEMINI_API_KEY_3 = ""
+GEMINI_API_KEY_4 = ""
 GEMINI_MODEL = "gemini-3.8-flash"
 ```
 
-Environment variables take precedence over Streamlit secrets. The key is passed directly to the SDK client; it is never displayed, stored in SQLite, or logged by StudyMate. See Google's [official Python SDK documentation](https://googleapis.github.io/python-genai/) and [available Gemini models](https://ai.google.dev/gemini-api/docs/models).
+The existing `GEMINI_API_KEY` setting remains supported for older setups. For each slot, an environment variable takes precedence over its Streamlit secret. Numbered keys are used in order, empty values are ignored, duplicates are removed, and at most four distinct keys are attempted. The legacy key is considered after numbered keys. Keys are passed directly to the SDK client and are never displayed, stored in SQLite, or logged by StudyMate. See Google's [official Python SDK documentation](https://googleapis.github.io/python-genai/) and [available Gemini models](https://ai.google.dev/gemini-api/docs/models).
+
+### Key failover and quotas
+
+If a request receives an authentication/permission response (HTTP 401 or 403) or a rate-limit/quota response (HTTP 429), StudyMate tries the next configured key, up to four distinct keys for that request. If all attempted keys fail, it reports the attempted key slots and asks you to check the keys and project quota. Other invalid requests do not trigger failover. Network failures and timeouts do not trigger another-key submission because the first request may already have completed; server errors are left to the SDK's bounded retry behavior and then reported.
+
+Key failover is for using separately configured credentials, not for evading provider restrictions. Keys attached to the same Google Cloud project share that project's Gemini quotas, so adding keys from one project does not increase its project-level rate limits. The dashboard, SQLite activity, PDF uploads, and local document library work without any keys; Gemini features need at least one valid key.
 
 ## Use the Gemini study tools
 

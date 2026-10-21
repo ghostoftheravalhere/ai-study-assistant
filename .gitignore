@@ -1,5 +1,10 @@
 # Python
 __pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
+test-artifacts/
+test-results/
 *.py[cod]
 *.pyo
 *.pyd

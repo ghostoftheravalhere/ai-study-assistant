@@ -3,7 +3,7 @@
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
 import httpx
@@ -54,21 +54,46 @@ class QuestionResult:
     original_context_length: int
 
 
+@dataclass(frozen=True)
+class ConfiguredGeminiKey:
+    """A configured key and its non-secret diagnostic label."""
+
+    slot: str
+    value: str = field(repr=False)
+
+
 def _read_secret_source() -> Mapping[str, Any]:
     try:
-        return {name: st.secrets.get(name, "") for name in ("GEMINI_API_KEY", "GEMINI_MODEL")}
+        names = ("GEMINI_MODEL", "GEMINI_API_KEY", *(f"GEMINI_API_KEY_{index}" for index in range(1, 5)))
+        return {name: st.secrets.get(name, "") for name in names}
     except (StreamlitSecretNotFoundError, FileNotFoundError):
         return {}
 
 
-def load_gemini_api_key(secrets_source: Mapping[str, Any] | None = None) -> str:
-    """Read the API key from the environment or Streamlit secrets, without logging it."""
-    environment_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if environment_key:
-        return environment_key
+def load_gemini_api_keys(
+    secrets_source: Mapping[str, Any] | None = None,
+) -> list[ConfiguredGeminiKey]:
+    """Load up to four distinct keys, preferring each environment slot to its secret."""
     source = secrets_source if secrets_source is not None else _read_secret_source()
-    value = source.get("GEMINI_API_KEY", "")
-    return value.strip() if isinstance(value, str) else ""
+    configured: list[ConfiguredGeminiKey] = []
+    seen: set[str] = set()
+    names = [(f"GEMINI_API_KEY_{index}", f"key {index}") for index in range(1, 5)]
+    # Keep the legacy variable available as a fallback after numbered keys.
+    names.append(("GEMINI_API_KEY", "legacy key"))
+    for name, slot in names:
+        value = os.environ.get(name, "").strip() or str(source.get(name, "") or "").strip()
+        if value and value not in seen:
+            configured.append(ConfiguredGeminiKey(slot=slot, value=value))
+            seen.add(value)
+        if len(configured) == 4:
+            break
+    return configured
+
+
+def load_gemini_api_key(secrets_source: Mapping[str, Any] | None = None) -> str:
+    """Backward-compatible helper returning the first configured credential."""
+    configured = load_gemini_api_keys(secrets_source)
+    return configured[0].value if configured else ""
 
 
 def load_gemini_model(secrets_source: Mapping[str, Any] | None = None) -> str:
@@ -83,7 +108,7 @@ def load_gemini_model(secrets_source: Mapping[str, Any] | None = None) -> str:
 
 def is_gemini_configured() -> bool:
     """Check configuration without returning or displaying a credential."""
-    return bool(load_gemini_api_key())
+    return bool(load_gemini_api_keys())
 
 
 def select_document_context(
@@ -199,10 +224,22 @@ class GeminiService:
         self,
         *,
         api_key: str | None = None,
+        api_keys: Sequence[str] | None = None,
         model: str | None = None,
         client_factory: Callable[..., Any] = genai.Client,
     ) -> None:
-        self._api_key = load_gemini_api_key() if api_key is None else api_key.strip()
+        if api_keys is not None:
+            self._api_keys = []
+            seen: set[str] = set()
+            for value in api_keys:
+                normalized = value.strip()
+                if normalized and normalized not in seen and len(self._api_keys) < 4:
+                    self._api_keys.append(ConfiguredGeminiKey(f"key {len(self._api_keys) + 1}", normalized))
+                    seen.add(normalized)
+        elif api_key is not None:
+            self._api_keys = [ConfiguredGeminiKey("key 1", api_key.strip())] if api_key.strip() else []
+        else:
+            self._api_keys = load_gemini_api_keys()
         self.model = model or load_gemini_model()
         self._client_factory = client_factory
 
@@ -214,9 +251,10 @@ class GeminiService:
         response_json_schema: dict[str, Any] | None = None,
         max_output_tokens: int = 2_048,
     ) -> str:
-        if not self._api_key:
+        if not self._api_keys:
             raise GeminiConfigurationError(
-                "Gemini is not configured yet. Add GEMINI_API_KEY to your environment or Streamlit secrets."
+                "Gemini is not configured yet. Add GEMINI_API_KEY or GEMINI_API_KEY_1 through GEMINI_API_KEY_4 "
+                "to your environment or Streamlit secrets."
             )
         config = types.GenerateContentConfig(
             system_instruction=system_instruction,
@@ -224,29 +262,58 @@ class GeminiService:
             response_mime_type="application/json" if response_json_schema else None,
             response_json_schema=response_json_schema,
         )
-        client = None
-        try:
-            client = self._client_factory(api_key=self._api_key)
-            response = client.models.generate_content(model=self.model, contents=contents, config=config)
-            response_text = response.text
-        except errors.APIError as error:
-            status = getattr(error, "code", None) or getattr(error, "status", None)
-            if status in (401, 403):
-                raise GeminiServiceError("Gemini rejected the API key or the key lacks access. Check its configuration in Google AI Studio.") from error
-            if status == 429:
-                raise GeminiServiceError("Gemini's rate limit or quota was reached. Wait a little, then try again.") from error
-            if status == 404:
-                raise GeminiServiceError("The configured Gemini model is unavailable. Check GEMINI_MODEL and try a supported model.") from error
-            if isinstance(status, int) and (status >= 500 or status in (408, 504)):
-                raise GeminiServiceError("Gemini is temporarily unavailable. Please try again later.") from error
-            raise GeminiServiceError("Gemini could not complete that request. Check the model configuration and try again.") from error
-        except httpx.RequestError as error:
-            raise GeminiServiceError("Could not reach Gemini. Check your internet connection and try again.") from error
-        finally:
-            if client is not None:
-                close = getattr(client, "close", None)
-                if close:
-                    close()
+        attempted_slots: list[str] = []
+        last_error: errors.APIError | None = None
+        response_text: str | None = None
+        succeeded = False
+        for key in self._api_keys[:4]:
+            attempted_slots.append(key.slot)
+            client = None
+            try:
+                client = self._client_factory(api_key=key.value)
+                response = client.models.generate_content(model=self.model, contents=contents, config=config)
+                response_text = response.text
+                succeeded = True
+                break
+            except errors.APIError as error:
+                last_error = error
+                status = getattr(error, "code", None)
+                # Only credential/permission and explicit quota/rate-limit HTTP statuses
+                # are safe failover candidates. Other 4xx errors are request failures.
+                if status not in (401, 403, 429):
+                    if status == 404:
+                        raise GeminiServiceError(
+                            f"The configured Gemini model is unavailable (using {key.slot}). Check GEMINI_MODEL."
+                        ) from None
+                    if isinstance(status, int) and status >= 500:
+                        raise GeminiServiceError(
+                            "Gemini is temporarily unavailable after its SDK retries. Try again later."
+                        ) from None
+                    raise GeminiServiceError(
+                        f"Gemini rejected the request (HTTP {status}; using {key.slot}). Check the request and model settings."
+                    ) from None
+            except httpx.TimeoutException as error:
+                # The provider may have completed the request before the timeout; do not
+                # submit a potentially billable duplicate using another credential.
+                raise GeminiServiceError(
+                    f"Gemini did not respond in time using {key.slot}. The request was not resubmitted with another key."
+                ) from None
+            except httpx.RequestError as error:
+                raise GeminiServiceError(
+                    f"Could not reach Gemini using {key.slot}. Check your internet connection and try again."
+                ) from None
+            finally:
+                if client is not None:
+                    close = getattr(client, "close", None)
+                    if close:
+                        close()
+
+        if last_error is not None and not succeeded:
+            attempted = ", ".join(attempted_slots)
+            raise GeminiServiceError(
+                f"No configured Gemini API key could complete this request (tried {attempted}). "
+                "Check the keys and rate limit or quota. Keys in the same Google Cloud project share Gemini quotas."
+            ) from None
 
         if not isinstance(response_text, str) or not response_text.strip():
             raise GeminiResponseError("Gemini returned no text for this request. Try rephrasing it.")
